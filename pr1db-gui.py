@@ -3,14 +3,13 @@
 import sys
 import time
 import concurrent.futures
-import pandas as pd
 import argparse
 from datetime import datetime, timedelta
 
 from PyQt5.QtWidgets import (QApplication, QWidget, QLabel, QLineEdit, QCheckBox, 
                              QPushButton, QVBoxLayout, QHBoxLayout, QListWidget, 
-                             QMessageBox, QTextEdit, QProgressBar)
-from PyQt5.QtGui import QTextCursor, QFont, QKeySequence
+                             QTextEdit, QProgressBar)
+from PyQt5.QtGui import QTextCursor, QKeySequence
 
 from pr1_export import PR1_GCwerks_Export
 from pr1_gcwerks2db import PR1_db
@@ -164,7 +163,7 @@ class PR1_DBGUI():
         # Check if "extract gcwerks first" is checked
         extract_first = self.extract_checkbox.isChecked()
         if extract_first:
-            PR1_GCwerks_Export().export_gc_data(input_start_dt, selected_gases, progress=progress_callback)
+            PR1_GCwerks_Export().export_gc_data(t0, selected_gases, progress=progress_callback)
 
         # insert into db tables
         for n, gas in enumerate(selected_gases):
