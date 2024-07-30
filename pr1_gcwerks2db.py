@@ -207,7 +207,6 @@ class PR1_db(pr1_export.PR1_base):
 
         self.tmptbl_get_eventnum()       # get event_num info from ccgg.flask_event table
         self.tmptbl_get_analnum()        # fill in previous anaysis data
-        time.sleep(0.3)
 
     def tmptbl_get_eventnum(self):
         """
@@ -295,7 +294,6 @@ class PR1_db(pr1_export.PR1_base):
         updated = self.db.doquery(sql)
         if updated is not None:
             print(f'Updated {updated} records in hats.{self.analysis_table}.')
-        time.sleep(0.3)
 
     def tmptbl_update_raw_data(self):
         # update area, height, w, rt, etc with data from the t_data temporary table
@@ -319,45 +317,19 @@ class PR1_db(pr1_export.PR1_base):
         updated = self.db.doquery(sql)
         if updated is not None:
             print(f'Updated {updated} rows in hats.{self.raw_data_table}')
-        time.sleep(0.3)
 
     def tmptbl_update_ancillary_data(self):
         # Inserts or updates four parameters p, p0, pnet, and t1 into the ancillary_data table
-        sql = f"""
-            # param 28 - final pressure
-            INSERT INTO {self.ancillary_table} (analysis_num, ancillary_num, value)
-            SELECT t.analysis_num, 28, t.p FROM t_data t
-            ON DUPLICATE KEY UPDATE
-            analysis_num=VALUES(analysis_num), ancillary_num=28, value=VALUES(value);
+        parameters = [(26, 'pnet'), (27, 'p0'), (28, 'p'), (29, 't1')]
 
-            # param 27 - initial pressure
-            INSERT INTO {self.ancillary_table} (analysis_num, ancillary_num, value)
-            SELECT t.analysis_num, 27, t.p0 FROM t_data t
-            ON DUPLICATE KEY UPDATE
-            analysis_num=VALUES(analysis_num), ancillary_num=27, value=VALUES(value);
-
-            # param 26 - net pressure
-            INSERT INTO {self.ancillary_table} (analysis_num, ancillary_num, value)
-            SELECT t.analysis_num, 26, t.pnet FROM t_data t
-            ON DUPLICATE KEY UPDATE
-            analysis_num=VALUES(analysis_num), ancillary_num=26, value=VALUES(value);
-
-            # param 29 - trap temp
-            INSERT INTO {self.ancillary_table} (analysis_num, ancillary_num, value)
-            SELECT t.analysis_num, 29, t.t1 FROM t_data t
-            ON DUPLICATE KEY UPDATE
-            analysis_num=VALUES(analysis_num), ancillary_num=29, value=VALUES(value);
-        """
-        self.db.doquery(sql)
-        time.sleep(0.3)
-
-    def tmptbl_test(self, v):
-        sql = f"""
-                UPDATE t_data
-                SET peak_height = {v}
-                WHERE analysis_num = 312997;
+        for param_num, column in parameters:
+            sql = f"""
+                INSERT INTO {self.ancillary_table} (analysis_num, ancillary_num, value)
+                SELECT t.analysis_num, {param_num}, t.{column} FROM t_data t
+                ON DUPLICATE KEY UPDATE
+                analysis_num=VALUES(analysis_num), ancillary_num={param_num}, value=VALUES(value);
             """
-        self.db.doquery(sql)
+            self.db.doquery(sql)
         
     def tmptbl_output(self):
         return pd.DataFrame(self.db.doquery("SELECT * from t_data;"))
