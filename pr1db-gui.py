@@ -232,22 +232,20 @@ def process_gas(gas, start_date, end_date):
 
 # the parallel stuff can cause issues when two process try to insert into a table at the same time.
 # switched back to the original in series method. 240724
-def run_in_parallel(start_date, molecules):
+def run_in_parallel(molecules, start_date, end_date):
+    # call on the first molecule in the list without concurrency. This allows for inserts
+    # on the analysis table once, before a bunch of attemps.
+    process_gas(molecules[0], start_date, end_date)
+    if len(molecules) == 1:
+        return
     with concurrent.futures.ThreadPoolExecutor() as executor:
         futures = []
-        for gas in molecules:
-            futures.append(executor.submit(process_gas, gas, start_date))
-            time.sleep(1)  # Introduce a 1-second delay between submissions
+        for gas in molecules[1:]:
+            futures.append(executor.submit(process_gas, gas, start_date, end_date))
+            time.sleep(.5)  # Introduce a 0.5-second delay between submissions
         for future in concurrent.futures.as_completed(futures):
             future.result()  # This will raise an exception if the callable raised
 
-"""
-def run_in_parallel(start_date, molecules):
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        futures = [executor.submit(process_gas, gas, start_date) for gas in molecules]
-        for future in concurrent.futures.as_completed(futures):
-            future.result()  # This will raise an exception if the callable raised
-"""
 
 def main():
 
@@ -272,9 +270,9 @@ def main():
         # batch process all molecules
         if args.extract:
             PR1_GCwerks_Export().export_gc_data(yymm, pr1.molecules)
-        #run_in_parallel(yymm, molecules)
-        for molecule in pr1.molecules:
-            process_gas(molecule, yymm, yymm_end)
+        run_in_parallel(pr1.molecules, yymm, yymm_end)
+        #for molecule in pr1.molecules:
+        #    process_gas(molecule, yymm, yymm_end)
         quit()
     elif args.list:
         molecules_c = [m.replace(',', '') for m in pr1.molecules]       # remove commas from mol names
@@ -290,9 +288,9 @@ def main():
     if args.extract:
         PR1_GCwerks_Export().export_gc_data(yymm, molecules)
 
-    #run_in_parallel(yymm, molecules)
-    for molecule in molecules:
-        process_gas(molecule, yymm, yymm_end)
+    run_in_parallel(molecules, yymm, yymm_end)
+    #for molecule in molecules:
+    #    process_gas(molecule, yymm, yymm_end)
     
 
 if __name__ == '__main__':
