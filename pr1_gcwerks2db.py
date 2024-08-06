@@ -19,7 +19,8 @@ class PR1_db(pr1_export.PR1_base):
         self.analytes = self.pr1_analytes()     # PR1 analytes (dict of molecule and parameter number)
         self.analysis_table = 'analysis'        # set to a table like analysis_gsd for debugging
         self.raw_data_table = 'raw_data'        # raw_data_gsd for degugging
-        self.ancillary_table = 'ancillary_data' # ancillary_data_gsd for debuggin
+        self.ancillary_table = 'ancillary_data' # ancillary_data_gsd for debugging
+        self.flags_table = 'flags_internal'
 
     def load_gcwerks(self, gas, start_date, stop_date='end'):
         """ Loads GCwerks data for a given gas and returns it as a DataFrame.
@@ -55,9 +56,11 @@ class PR1_db(pr1_export.PR1_base):
 
         # trim the dataframe to use start_date (start_dt is the datetime value)
         if stop_date == 'end':
-            df = df.loc[start_dt:]
+            df = df.loc[start_dt:].iloc[:-1]
         else:
             df = df.loc[start_dt:stop_dt]
+
+        df = df.reset_index(drop=True)
 
         # parameter and event numbers
         df['pnum'] = self.analytes[gas].strip()
@@ -66,7 +69,8 @@ class PR1_db(pr1_export.PR1_base):
         df['type'] = df['type'].str.strip()
         df['sample'] = df['sample'].str.strip()
         df['standard'] = df['standard'].str.strip()
-
+        df['sample_ID'] = df['sample'].str.strip()
+        
         # This section parses the sample field. This field is not standardized. It can have
         # a variety of info including sample site code, sample ID, and pair_ID for HATS flasks.
         # no dash in sample
@@ -295,6 +299,20 @@ class PR1_db(pr1_export.PR1_base):
         if updated is not None:
             print(f'Updated {updated} records in hats.{self.analysis_table}.')
 
+    def tmptbl_update_flags_internal(self):
+        tag = '66'      # preliminary data tag
+        sql = f"""
+            INSERT INTO {self.flags_table} (analysis_num, parameter_num, iflag, comment, tag_num)
+            SELECT
+                t.analysis_num, t.parameter_num,
+                '*', '', {tag}
+            FROM t_data t
+            WHERE t.analysis_num = 0;
+        """
+        inserted = self.db.doquery(sql)
+        if inserted is not None:
+            print(f'Inserted {inserted} new records into hats.{self.flags_table}.')
+
     def tmptbl_update_raw_data(self):
         # update area, height, w, rt, etc with data from the t_data temporary table
         sql = f"""
@@ -336,7 +354,7 @@ class PR1_db(pr1_export.PR1_base):
 
 
 def get_default_date():
-    return (datetime.now() - timedelta(days=30)).strftime('%Y%m%d')
+    return (datetime.now() - timedelta(days=30)).strftime('%y%m')
 
 
 def parse_molecules(molecules):
@@ -380,6 +398,7 @@ def main():
     for gas in molecules:
         df = pr1.load_gcwerks(gas, start_date)
         pr1.tmptbl_fill(df)             # create and fill in temp data table with GCwerks results
+        pr1.tmptbl_update_flags_internal()  # need to call this before analysis rows are added.
         pr1.tmptbl_update_analysis()    # insert and update any rows in hats.analysis with new data
         pr1.tmptbl_update_raw_data()    # update the hats.raw_data table with area, ht, w, rt
         pr1.tmptbl_update_ancillary_data()  # updates the hats.ancillary table with p, p0, pnet, and t1 values
