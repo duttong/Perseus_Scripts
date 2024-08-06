@@ -44,7 +44,7 @@ class PR1_db(pr1_export.PR1_base):
 
         file = self.gcwerks_results / f'data_{gas}.csv'
         if file.exists():
-            df = pd.read_csv(file)
+            df = pd.read_csv(file, na_values=[' nan'])
             df.columns = [col.replace(f'{gas}_', '').strip() for col in df.columns]
         else:
             print(f'Missing GCwerks output file: {file}')
@@ -59,6 +59,10 @@ class PR1_db(pr1_export.PR1_base):
             df = df.loc[start_dt:].iloc[:-1]
         else:
             df = df.loc[start_dt:stop_dt]
+
+        # trim the last row if area and height are nan (this happens when the chrom is still writting)
+        if pd.isna(df.iloc[-1]['area']) & pd.isna(df.iloc[-1]['ht']):
+            df = df[:-1]
 
         df = df.reset_index(drop=True)
 
