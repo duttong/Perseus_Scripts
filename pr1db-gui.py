@@ -120,6 +120,7 @@ class PR1_DBGUI():
 
         # Checkbox for "extract gcwerks first"
         self.extract_checkbox = QCheckBox('Re-extract from GCwerks First')
+        self.extract_checkbox.setChecked(True)
         layout.addWidget(self.extract_checkbox)
 
         # Execute button
