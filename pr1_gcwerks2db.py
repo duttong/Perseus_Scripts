@@ -56,11 +56,11 @@ class PR1_db(pr1_export.PR1_base):
 
         # trim the dataframe to use start_date (start_dt is the datetime value)
         if stop_date == 'end':
-            df = df.loc[start_dt:].iloc[:-1]
+            df = df.loc[start_dt:]
         else:
             df = df.loc[start_dt:stop_dt]
 
-        # trim the last row if area and height are nan (this happens when the chrom is still writting)
+        # trim the last row if area and height are nan (this happens when the chrom is not finished)
         if pd.isna(df.iloc[-1]['area']) & pd.isna(df.iloc[-1]['ht']):
             df = df[:-1]
 
