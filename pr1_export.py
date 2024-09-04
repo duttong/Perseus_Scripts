@@ -7,12 +7,11 @@ import re
 from pathlib import Path
 import pandas as pd
 from tqdm import tqdm
-import threading
 
 class PR1_base:
     inst_num = 58  # PR1
     gcexport_path = "/hats/gc/gcwerks-3/bin/gcexport"
-    export_dir = "/hats/gc/pr1/results"
+    export_dir = Path("/hats/gc/pr1/results")
 
     # this list was generated from the sql query in the pr1_analytes function below
     molecules = [
@@ -112,8 +111,8 @@ class PR1_GCwerks_Export(PR1_base):
             process.wait()
 
         # convert 1,2-DCE file to the name 12-DCE. The old name causes problems due to the comma.
-        old = Path(f"{self.export_dir}/data_1,2-DCE.csv")
-        new = Path(f"{self.export_dir}/data_12-DCE.csv")
+        old = self.export_dir / "data_1,2-DCE.csv"
+        new = self.export_dir / "data_12-DCE.csv"
 
         if not old.exists():
             return

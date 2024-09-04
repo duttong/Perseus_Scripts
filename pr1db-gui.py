@@ -227,23 +227,16 @@ def process_gas(gas, start_date, end_date):
     pr1 = PR1_db()
     df = pr1.load_gcwerks(gas, start_date, stop_date=end_date)
     pr1.tmptbl_fill(df)             # create and fill in temp data table with GCwerks results
+    pr1.tmptbl_update_flags_internal() # need to call this before analysis rows are added.
     pr1.tmptbl_update_analysis()    # insert and update any rows in hats.analysis with new data
     pr1.tmptbl_update_raw_data()    # update the hats.raw_data table with area, ht, w, rt
     pr1.tmptbl_update_ancillary_data()  # updates the hats.ancillary table with p, p0, pnet, and t1 values
 
-# the parallel stuff can cause issues when two process try to insert into a table at the same time.
-# switched back to the original in series method. 240724
 def run_in_parallel(molecules, start_date, end_date):
-    # call on the first molecule in the list without concurrency. This allows for inserts
-    # on the analysis table once, before a bunch of attemps.
-    process_gas(molecules[0], start_date, end_date)
-    if len(molecules) == 1:
-        return
     with concurrent.futures.ThreadPoolExecutor() as executor:
         futures = []
-        for gas in molecules[1:]:
+        for gas in molecules:
             futures.append(executor.submit(process_gas, gas, start_date, end_date))
-            time.sleep(.5)  # Introduce a 0.5-second delay between submissions
         for future in concurrent.futures.as_completed(futures):
             future.result()  # This will raise an exception if the callable raised
 
@@ -272,9 +265,8 @@ def main():
         if args.extract:
             PR1_GCwerks_Export().export_gc_data(yymm, pr1.molecules)
         run_in_parallel(pr1.molecules, yymm, yymm_end)
-        #for molecule in pr1.molecules:
-        #    process_gas(molecule, yymm, yymm_end)
         quit()
+
     elif args.list:
         molecules_c = [m.replace(',', '') for m in pr1.molecules]       # remove commas from mol names
         print(f"Valid molecule names: {', '.join(molecules_c)}")

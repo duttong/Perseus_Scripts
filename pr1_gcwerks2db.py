@@ -1,10 +1,7 @@
 #!/usr/bin/env python
 
 import pandas as pd
-import time
-from pathlib import Path
 import argparse
-from pathlib import Path
 from datetime import datetime, timedelta
 
 import pr1_export
@@ -14,13 +11,14 @@ class PR1_db(pr1_export.PR1_base):
     def __init__(self):
         super().__init__()
         self.pr1_start_date = '20150601'        # data before this date is not used.
-        self.gcwerks_results = Path('/hats/gc/pr1/results/')
+        self.gcwerks_results = self.export_dir  # Path type
         self.sites = self.gml_sites()           # site codes and numbers
         self.analytes = self.pr1_analytes()     # PR1 analytes (dict of molecule and parameter number)
         self.analysis_table = 'analysis'        # set to a table like analysis_gsd for debugging
         self.raw_data_table = 'raw_data'        # raw_data_gsd for degugging
         self.ancillary_table = 'ancillary_data' # ancillary_data_gsd for debugging
         self.flags_table = 'flags_internal'
+        self.pfplogs = pd.DataFrame()
 
     def load_gcwerks(self, gas, start_date, stop_date='end'):
         """ Loads GCwerks data for a given gas and returns it as a DataFrame.
@@ -60,12 +58,16 @@ class PR1_db(pr1_export.PR1_base):
         else:
             df = df.loc[start_dt:stop_dt]
 
-        # trim the last row if area and height are nan (this happens when the chrom is not finished)
-        if pd.isna(df.iloc[-1]['area']) & pd.isna(df.iloc[-1]['ht']):
+        # trim the last two rows if area and height are nan (this happens when the chrom is not finished)
+        if pd.isna(df.iloc[-2]['area']) & pd.isna(df.iloc[-2]['ht']):
+            df = df[:-2]
+        elif pd.isna(df.iloc[-1]['area']) & pd.isna(df.iloc[-1]['ht']):
             df = df[:-1]
 
+        # insure there are no duplicate index rows
         df = df.reset_index(drop=True)
 
+        # add columns
         # parameter and event numbers
         df['pnum'] = self.analytes[gas].strip()
         df['event'] = '0'
@@ -121,20 +123,60 @@ class PR1_db(pr1_export.PR1_base):
         # Map the 'type' column to 'lab_num' using the mapping dictionary
         df['lab_num'] = df['type'].str.upper().map(lab_num_mapping).fillna(0).astype(int)
 
-        # clean up ancillary data
-        ancillary_table = {'psamp0':27, 'psamp':28, 'psampnet':26, 'T1':29}
-        # add pnet
+        # add psampnet
         df['psampnet'] = pd.to_numeric(df["psamp"], errors='coerce', downcast="float") - pd.to_numeric(df["psamp0"], errors='coerce', downcast="float")
 
+        # load pfp.log data if not loaded yet
+        if self.pfplogs.empty:
+            self.pfplogs = self.load_pfp_logs()
+
+        # sync pfp.log data to gcwerks data.
+        df['dt'] = pd.to_datetime(df['time'])
+        df = pd.merge(df, self.pfplogs, on='dt', how='left')
+        
         # Put columns in order
+        # columns 'PFP_mp_i', 'PFP_mp_f', 'pfp_sn', 'Flask' come from the pfplog files.
         columns = ['time', 'type', 'sample', 'site', 'site_num', 'sample_ID', 'event', 'standard', 
                    'serial_num', 'standard_num', 'lab_num', 'port', 'psamp0', 'psamp', 'psampnet', 'T1', 
-                   'pnum', 'area', 'ht', 'rt', 'w']
+                   'pnum', 'area', 'ht', 'rt', 'w', 'PFP_mp_i', 'PFP_mp_f', 'pfp_sn', 'Flask']
         df = df[columns]
         print(f'{gas} gcwerks results loaded.')
-
         return df
     
+    def load_pfp_logs(self):
+        """ The pfp logs have pfp manifold pressures. The date and time in these files
+            match the gcwerks exported integration date and times. 
+            The follow code loads all of the pfp log files into a single dataframe. """
+        pfplog_p = self.gcwerks_results / 'pfp.log'
+        pfp_vars = []
+        for pfplog in pfplog_p.glob('????'):
+            # the 1409 file has different columns than the other files. Skip it for now.
+            if pfplog.name != '1409': 
+                pfp = pd.read_csv(pfplog, sep="\s+", 
+                                  names=['date', 'time', 'pfp_sn', 'Flask', 'PFP_mp_i', 'PFP_mp_f'])
+                pfp_vars.append(pfp)
+
+        pfps = pd.concat(pfp_vars, axis=0)
+
+        # the header of the pfp.log files is mixed throughout the data files.
+        # strip out rows where the header is extra text
+        pfps['Flask'] = pfps['Flask'].astype(str)
+        pfps = pfps[~pfps['Flask'].str.contains('lask')]   # use 'lask' to catch 'Flask' and 'flask'
+
+        # make a datetime column
+        pfps['date'] = pfps['date'].astype(str)
+        pfps['time'] = pfps['time'].astype(str)
+        pfps['time'] = pfps['time'].str.zfill(4)  # fill in 0s 
+        pfps['dt'] = pd.to_datetime(pfps['date'].astype(str) + pfps['time'].astype(str), format='%y%m%d%H%M')
+
+        # drop rows where the Flask is nan
+        pfps = pfps[pfps['Flask'].str.isnumeric()]
+        
+        pfps['PFP_mp_i'] = pfps['PFP_mp_i'].astype(float)
+        pfps['PFP_mp_f'] = pfps['PFP_mp_f'].astype(float)
+
+        return pfps[['dt', 'pfp_sn', 'Flask', 'PFP_mp_i', 'PFP_mp_f']]
+
     def tmptbl_create(self):
         """ Create a temporary table for manipulation and insertion. 
              Drop the temporary table if it already exists
@@ -166,7 +208,9 @@ class PR1_db(pr1_export.PR1_base):
                 r.peak_area AS p,
                 r.peak_area AS p0,
                 r.peak_area AS pnet,
-                r.peak_area AS t1
+                r.peak_area AS t1,
+                r.peak_area AS pfp_mp_i,
+                r.peak_area AS pfp_mp_f
             FROM 
                 analysis a 
                 JOIN raw_data r ON r.analysis_num = a.num
@@ -188,9 +232,9 @@ class PR1_db(pr1_export.PR1_base):
         INSERT INTO t_data (
             analysis_num, analysis_datetime, inst_num, sample_ID, site_num, sample_type, port, 
             standards_num, std_serial_num, event_num, lab_num, parameter_num,
-            peak_area, peak_height, peak_width, peak_RT, p, p0, pnet, t1
+            peak_area, peak_height, peak_width, peak_RT, p, p0, pnet, t1, pfp_mp_i, pfp_mp_f
         ) VALUES (
-            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
         );
         """
 
@@ -204,7 +248,8 @@ class PR1_db(pr1_export.PR1_base):
                 anum, row.time, self.inst_num, sid, row.site_num, row.type, row.port,
                 row.standard_num, row.serial_num, row.event, row.lab_num, pnum,
                 self.NULL(row.area), self.NULL(row.ht), self.NULL(row.w), self.NULL(row.rt),
-                self.NULL(row.psamp), self.NULL(row.psamp0), self.NULL(row.psampnet), self.NULL(row.T1)
+                self.NULL(row.psamp), self.NULL(row.psamp0), self.NULL(row.psampnet), self.NULL(row.T1),
+                self.NULL(row.PFP_mp_i), self.NULL(row.PFP_mp_f)
             )
             if row.type != 'unknown' and row.type != 'TEST':
                 params.append(p0)
@@ -251,6 +296,12 @@ class PR1_db(pr1_export.PR1_base):
                 AND event_num = t.event_num
             );
         """
+        sql = f"""
+            update t_data t 
+            join {self.analysis_table} a on t.analysis_datetime = a.analysis_datetime AND t.inst_num = a.inst_num AND t.sample_id = a.sample_id
+            set t.analysis_num=a.num;
+        """
+        #print(self.db.doquery("Select count(*) from t_data;", numRows=0))
         self.db.doquery(sql)
 
     def tmptbl_insert_analysis_debug(self):
@@ -278,8 +329,10 @@ class PR1_db(pr1_export.PR1_base):
             SELECT DISTINCT 
                 analysis_datetime, inst_num, sample_ID, site_num, sample_type, port, 
                 standards_num, std_serial_num, event_num, lab_num
-            FROM t_data 
-            WHERE analysis_num = 0;
+            FROM t_data t
+            WHERE analysis_num = 0
+            ON DUPLICATE KEY UPDATE 
+                event_num=t.event_num;
         """
         inserted = self.db.doquery(sql)
 
@@ -296,7 +349,8 @@ class PR1_db(pr1_export.PR1_base):
 
         sql = f"""
             UPDATE hats.{self.analysis_table} a, t_data t 
-            SET a.standards_num=t.standards_num, a.std_serial_num=t.std_serial_num, a.port=t.port, a.sample_type=t.sample_type
+            SET a.standards_num=t.standards_num, a.std_serial_num=t.std_serial_num, 
+                a.port=t.port, a.sample_type=t.sample_type
             WHERE a.num=t.analysis_num and t.analysis_num!=0
         """
         updated = self.db.doquery(sql)
@@ -305,13 +359,19 @@ class PR1_db(pr1_export.PR1_base):
 
     def tmptbl_update_flags_internal(self):
         tag = '66'      # preliminary data tag
+
+        # GSD added the "ON DUPLICATE KEY" portion on 240828
         sql = f"""
             INSERT INTO {self.flags_table} (analysis_num, parameter_num, iflag, comment, tag_num)
             SELECT
                 t.analysis_num, t.parameter_num,
                 '*', '', {tag}
             FROM t_data t
-            WHERE t.analysis_num = 0;
+            WHERE t.analysis_num = 0
+            ON DUPLICATE KEY UPDATE
+                iflag = VALUES(iflag),
+                comment = VALUES(comment),
+                tag_num = VALUES(tag_num);
         """
         inserted = self.db.doquery(sql)
         if inserted is not None:
@@ -331,10 +391,8 @@ class PR1_db(pr1_export.PR1_base):
             FROM
                 t_data t
             ON DUPLICATE KEY UPDATE
-                peak_area = IF(VALUES(peak_area) <> {self.raw_data_table}.peak_area, VALUES(peak_area), {self.raw_data_table}.peak_area),
-                peak_height = IF(VALUES(peak_height) <> {self.raw_data_table}.peak_height, VALUES(peak_height), {self.raw_data_table}.peak_height),
-                peak_width = IF(VALUES(peak_width) <> {self.raw_data_table}.peak_width, VALUES(peak_width), {self.raw_data_table}.peak_width),
-                peak_RT = IF(VALUES(peak_RT) <> {self.raw_data_table}.peak_RT, VALUES(peak_RT), {self.raw_data_table}.peak_RT);
+                peak_area=VALUES(peak_area), peak_height=VALUES(peak_height),
+                peak_width=VALUES(peak_width), peak_RT=VALUES(peak_RT);
         """
         updated = self.db.doquery(sql)
         if updated is not None:
@@ -342,7 +400,8 @@ class PR1_db(pr1_export.PR1_base):
 
     def tmptbl_update_ancillary_data(self):
         # Inserts or updates four parameters p, p0, pnet, and t1 into the ancillary_data table
-        parameters = [(26, 'pnet'), (27, 'p0'), (28, 'p'), (29, 't1')]
+        # added PFP_mp_i and PFP_mp_f
+        parameters = [(9, 'pfp_mp_f'), (10, 'pfp_mp_i'), (26, 'pnet'), (27, 'p0'), (28, 'p'), (29, 't1')]
 
         for param_num, column in parameters:
             sql = f"""
@@ -399,9 +458,14 @@ def main():
     if args.extract:
         pr1_export.PR1_GCwerks_Export().export_gc_data(start_date, molecules)
     
-    for gas in molecules:
+    for n, gas in enumerate(molecules):
         df = pr1.load_gcwerks(gas, start_date)
+        #print(df.loc[df['time'] > '2024-08-28 03:11:00'])
         pr1.tmptbl_fill(df)             # create and fill in temp data table with GCwerks results
+
+        #tmp = pd.DataFrame(pr1.tmptbl_output())
+        #print(tmp.loc[tmp.analysis_num >= 317010][['analysis_datetime', 'analysis_num', 'sample_type']])
+
         pr1.tmptbl_update_flags_internal()  # need to call this before analysis rows are added.
         pr1.tmptbl_update_analysis()    # insert and update any rows in hats.analysis with new data
         pr1.tmptbl_update_raw_data()    # update the hats.raw_data table with area, ht, w, rt
