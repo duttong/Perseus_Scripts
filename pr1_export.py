@@ -22,7 +22,7 @@ class PR1_base:
         "HCFC-124", "HFC-236fa", "HCFC-21", "CFC-114", "HCFC-133a", "HFC-245fa", "CFC-11", "CH3I",
         "CH2Cl2", "iC5H12", "morpholine", "nC5H12", "HCFC-141b", "HCFC-123", "CFC-113", "PFTEA",
         "H-1011", "H-2402", "HFC-365mfc", "CHCl3", "nC6H14", "CCl4", "TCE", "CH2Br2", "CH3CCl3",
-        "1,2-DCE", "C6H6", "CFC-112", "PCE", "PFTPA", "C7H8", "CHBr3"
+        "1,2-DCE", "C6H6", "CFC-112", "PCE", "PFTPA", "C7H8", "CHBr3", "CFC-113a"
     ]
     molecules = ['12-DCE' if m == '1,2-DCE' else m for m in molecules]
 
