@@ -85,6 +85,7 @@ class PR1_db(pr1_export.PR1_base):
         df.loc[df['sample'].str.count('-') == 0, 'sample_ID'] = df['sample']
         # one dash in sample
         # BLD-badtestB
+        # need to leave ALM-XXX and SX-XXXX alone
         pattern = r'^([A-Z]+)-?([A-Za-z0-9]+)?$'
         df.loc[df['sample'].str.count('-') == 1, 'site'] = df['sample'].str.extract(pattern)[0]
         df.loc[df['sample'].str.count('-') == 1, 'sample_ID'] = df['sample'].str.extract(pattern)[1]
@@ -98,6 +99,10 @@ class PR1_db(pr1_export.PR1_base):
         df.loc[(df['sample'].str.count('-') == 2) & (df['type'] == 'HATS'), 'event'] = extracted[2]
         # this is needed if the previous line if the "pattern" regex doesn't find a extracted group 2
         df.loc[df['event'].isnull(), 'event'] = 0 
+
+        # Every type that is not a flask (CCGG, PFP, HATS) set the site blank and the sample_ID = sample
+        df.loc[~df['type'].str.upper().isin(['CCGG', 'PFP', 'HATS']), 'site'] = ''
+        df.loc[~df['type'].str.upper().isin(['CCGG', 'PFP', 'HATS']), 'sample_ID'] = df['sample']
 
         # lookup site number, 0 if not found
         df['site_num'] = df['site'].map(self.sites).fillna(0).astype(int)
@@ -286,6 +291,7 @@ class PR1_db(pr1_export.PR1_base):
         Update the `analysis_num` in the temporary table `t_data` based on matching criteria 
         from the `analysis` table.
         """
+        '''
         sql = f"""
             UPDATE t_data t
             SET analysis_num = (
@@ -296,9 +302,11 @@ class PR1_db(pr1_export.PR1_base):
                 AND event_num = t.event_num
             );
         """
+        '''
         sql = f"""
             update t_data t 
-            join {self.analysis_table} a on t.analysis_datetime = a.analysis_datetime AND t.inst_num = a.inst_num AND t.sample_id = a.sample_id
+            join {self.analysis_table} a on t.analysis_datetime = a.analysis_datetime 
+            AND t.inst_num = a.inst_num AND t.sample_id = a.sample_id
             set t.analysis_num=a.num;
         """
         #print(self.db.doquery("Select count(*) from t_data;", numRows=0))
@@ -436,7 +444,7 @@ def main():
 
     parser = argparse.ArgumentParser(description='Insert Perseus GCwerks data into HATS db for selected date range. If no start_date \
                                      is specifide then work on the last 30 days of data.')
-    parser.add_argument('date', nargs='?', default=get_default_date(), help='Date in the format YYYYMMDD or YYYYMMDD.HHMM')
+    parser.add_argument('date', nargs='?', default=get_default_date(), help='Date in the format YYMM')
     parser.add_argument('-m', '--molecules', type=str, default=pr1.molecules,
                         help='Comma-separated list of molecules. Add quotes around the list if spaces are used. Default all molecules.')
     parser.add_argument('-x', '--extract', action='store_true', help='Re-extract data from GCwerks first.')
