@@ -13,23 +13,11 @@ class PR1_base:
     gcexport_path = "/hats/gc/gcwerks-3/bin/gcexport"
     export_dir = Path("/hats/gc/pr1/results")
 
-    # this list was generated from the sql query in the pr1_analytes function below
-    molecules = [
-        "CF4", "NF3", "C2H6", "PFC-116", "C2H4", "SF6", "CFC-13", "HFC-23", "C2H2",
-        "COS", "HFC-32", "SO2F2", "H-1301", "PFC-218", "C3H8", "CFC-115", "HFC-125", "HFC-143a",
-        "HCFC-22", "C3H6", "CFC-12", "HFC-134a", "HFO-1234yf", "HFC-134", "CH3Cl", "HFC-152a",
-        "HFO-1234zeE", "CS2", "iC4H10", "HFC-227ea", "H-1211", "nC4H10", "CH3Br", "HCFC-142b",
-        "HCFC-124", "HFC-236fa", "HCFC-21", "CFC-114", "HCFC-133a", "HFC-245fa", "CFC-11", "CH3I",
-        "CH2Cl2", "iC5H12", "morpholine", "nC5H12", "HCFC-141b", "HCFC-123", "CFC-113", "PFTEA",
-        "H-1011", "H-2402", "HFC-365mfc", "CHCl3", "nC6H14", "CCl4", "TCE", "CH2Br2", "CH3CCl3",
-        "1,2-DCE", "C6H6", "CFC-112", "PCE", "PFTPA", "C7H8", "CHBr3", "CFC-113a"
-    ]
-    molecules = ['12-DCE' if m == '1,2-DCE' else m for m in molecules]
-
     def __init__(self):
         sys.path.append('/ccg/src/db/')
         import db_utils.db_conn as db_conn
         self.db = db_conn.HATS_ng()
+        self.molecules = self.pr1_molecules()
     
     def gml_sites(self):
         """Returns a dictionary of site codes and site numbers from gmd.site."""
@@ -52,6 +40,10 @@ class PR1_base:
         analytes_dict = dict(zip(df['display_name'], df['param_num']))
         analytes_dict['12-DCE'] = analytes_dict['1,2-DCE']
         return analytes_dict
+    
+    def pr1_molecules(self):
+        analytes = self.pr1_analytes()
+        return list(analytes.keys())
 
     @staticmethod
     def convert_date_format(date_str):
@@ -155,17 +147,18 @@ class PR1_GCwerks_Export(PR1_base):
     @staticmethod
     def main():
         pr1_export = PR1_GCwerks_Export()
+        default_molecules = list(pr1_export.molecules)
         
         parser = argparse.ArgumentParser(description='Export Perseus data with specified start date.')
         parser.add_argument('start_date', type=str, nargs='?', default='2201',
                             help='Start date in the format YYMM (default: 2201)')
-        parser.add_argument('-m', '--molecules', type=str, default=pr1_export.molecules,
+        parser.add_argument('-m', '--molecules', type=str, default=default_molecules,
                             help='Comma-separated list of molecules. Add quotes around the list if spaces are used. Default all molecules.')
         parser.add_argument('--list', action='store_true', help='List all available molecule names.')
 
         args = parser.parse_args()
         if args.list:
-            print(f"Valid molecule names: {', '.join(PR1_GCwerks_Export.molecules)}")
+            print(f"Valid molecule names: {', '.join(default_molecules)}")
             quit()
 
         molecules = pr1_export.parse_molecules(args.molecules)     # returns a list of molecules
