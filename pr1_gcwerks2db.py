@@ -3,6 +3,7 @@
 import pandas as pd
 import argparse
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import pr1_export
 
@@ -18,6 +19,7 @@ class PR1_db(pr1_export.PR1_base):
         self.raw_data_table = 'raw_data'        # raw_data_gsd for degugging
         self.ancillary_table = 'ancillary_data' # ancillary_data_gsd for debugging
         self.flags_table = 'flags_internal'
+        self.pfplogs_path = Path('/data/Perseus-1/logs/pfp.log/')
         self.pfplogs = pd.DataFrame()
 
     def load_gcwerks(self, gas, start_date, stop_date='end'):
@@ -152,9 +154,8 @@ class PR1_db(pr1_export.PR1_base):
         """ The pfp logs have pfp manifold pressures. The date and time in these files
             match the gcwerks exported integration date and times. 
             The follow code loads all of the pfp log files into a single dataframe. """
-        pfplog_p = self.gcwerks_results / 'pfp.log'
         pfp_vars = []
-        for pfplog in pfplog_p.glob('????'):
+        for pfplog in self.pfplogs_path.glob('????'):
             # the 1409 file has different columns than the other files. Skip it for now.
             if pfplog.name != '1409': 
                 pfp = pd.read_csv(pfplog, sep="\s+", 

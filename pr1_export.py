@@ -35,10 +35,10 @@ class PR1_base:
 
     def pr1_analytes(self):
         """Returns a dictionary of PR1 analytes and parameter numbers."""
-        sql = "SELECT param_num, display_name FROM hats.analyte_list WHERE inst_num = %s"
-        df = pd.DataFrame(self.db.doquery(sql, (self.inst_num,)))
+        sql = f"SELECT param_num, display_name FROM hats.analyte_list WHERE inst_num = {self.inst_num}"
+        df = pd.DataFrame(self.db.doquery(sql))
         analytes_dict = dict(zip(df['display_name'], df['param_num']))
-        analytes_dict['12-DCE'] = analytes_dict['1,2-DCE']
+        #analytes_dict['12-DCE'] = analytes_dict['1,2-DCE']
         return analytes_dict
     
     def pr1_molecules(self):
