@@ -102,6 +102,7 @@ class PR1_GCwerks_Export(PR1_base):
                 progress(10)
             process.wait()
 
+        """
         # convert 1,2-DCE file to the name 12-DCE. The old name causes problems due to the comma.
         old = self.export_dir / "data_1,2-DCE.csv"
         new = self.export_dir / "data_12-DCE.csv"
@@ -120,6 +121,7 @@ class PR1_GCwerks_Export(PR1_base):
 
         old.unlink()
         new.chmod(0o664)
+        """
 
     @staticmethod
     def verify_start_date(date_str):
