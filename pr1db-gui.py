@@ -84,10 +84,10 @@ class PR1_DBGUI():
         self.gas_list = MyListWidget()
         self.gas_list.setSelectionMode(QListWidget.MultiSelection)
         gases = sorted(self.pr1db.analytes)
-        try:
-            gases.remove('1,2-DCE')
-        except ValueError:
-            pass
+        #try:
+        #    gases.remove('1,2-DCE')
+        #except ValueError:
+        #    pass
         self.gas_list.addItems(gases)
         layout.addWidget(self.gas_list)
 
@@ -216,7 +216,7 @@ def get_default_yymm():
 def parse_molecules(molecules):
     if molecules:
         try:
-            molecules = molecules.replace('1,2-DCE', '12-DCE')
+            #molecules = molecules.replace('1,2-DCE', '12-DCE')
             molecules = molecules.replace(' ','')   # remove spaces
             return molecules.split(',')
         except AttributeError:      # already a list. just return
