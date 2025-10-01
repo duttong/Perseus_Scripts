@@ -392,19 +392,22 @@ class PR1_db(pr1_export.PR1_base):
     def tmptbl_update_raw_data(self):
         # update area, height, w, rt, etc with data from the t_data temporary table
         sql = f"""
-            INSERT INTO {self.raw_data_table} (analysis_num, parameter_num, peak_area, peak_height, peak_width, peak_RT)
+            INSERT INTO {self.raw_data_table} (analysis_num, parameter_num, peak_area, peak_height, peak_width, peak_RT, start_level, end_level)
             SELECT
                 t.analysis_num,
                 t.parameter_num,
                 t.peak_area,
                 t.peak_height,
                 t.peak_width,
-                t.peak_RT
+                t.peak_RT,
+                t.start_level,
+                t.end_level
             FROM
                 t_data t
             ON DUPLICATE KEY UPDATE
                 peak_area=VALUES(peak_area), peak_height=VALUES(peak_height),
-                peak_width=VALUES(peak_width), peak_RT=VALUES(peak_RT);
+                peak_width=VALUES(peak_width), peak_RT=VALUES(peak_RT),
+                start_level=VALUES(start_level), end_level=VALUES(end_level);
         """
         updated = self.db.doquery(sql)
         if updated is not None:
@@ -413,8 +416,7 @@ class PR1_db(pr1_export.PR1_base):
     def tmptbl_update_ancillary_data(self):
         # Inserts or updates four parameters p, p0, pnet, and t1 into the ancillary_data table
         # added PFP_mp_i and PFP_mp_f
-        parameters = [(9, 'pfp_mp_f'), (10, 'pfp_mp_i'), (26, 'pnet'), (27, 'p0'), (28, 'p'), (29, 't1'),
-                      (31, 'start_level'), (32, 'end_level')]
+        parameters = [(9, 'pfp_mp_f'), (10, 'pfp_mp_i'), (26, 'pnet'), (27, 'p0'), (28, 'p'), (29, 't1')]
 
         for param_num, column in parameters:
             sql = f"""
