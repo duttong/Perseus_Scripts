@@ -145,7 +145,7 @@ class PR1_db(pr1_export.PR1_base):
         # columns 'PFP_mp_i', 'PFP_mp_f', 'pfp_sn', 'Flask' come from the pfplog files.
         columns = ['time', 'type', 'sample', 'site', 'site_num', 'sample_ID', 'event', 'standard', 
                    'serial_num', 'standard_num', 'lab_num', 'port', 'psamp0', 'psamp', 'psampnet', 'T1', 
-                   'pnum', 'area', 'ht', 'rt', 'w', 'PFP_mp_i', 'PFP_mp_f', 'pfp_sn', 'Flask']
+                   'pnum', 'area', 'ht', 'rt', 'w', 'start_level', 'end_level', 'PFP_mp_i', 'PFP_mp_f', 'pfp_sn', 'Flask']
         df = df[columns]
         print(f'{gas} gcwerks results loaded.')
         return df
@@ -215,6 +215,8 @@ class PR1_db(pr1_export.PR1_base):
                 r.peak_area AS p0,
                 r.peak_area AS pnet,
                 r.peak_area AS t1,
+                r.peak_area AS start_level,
+                r.peak_area AS end_level,
                 r.peak_area AS pfp_mp_i,
                 r.peak_area AS pfp_mp_f
             FROM 
@@ -238,9 +240,9 @@ class PR1_db(pr1_export.PR1_base):
         INSERT INTO t_data (
             analysis_num, analysis_datetime, inst_num, sample_ID, site_num, sample_type, port, 
             standards_num, std_serial_num, event_num, lab_num, parameter_num,
-            peak_area, peak_height, peak_width, peak_RT, p, p0, pnet, t1, pfp_mp_i, pfp_mp_f
+            peak_area, peak_height, peak_width, peak_RT, start_level, end_level, p, p0, pnet, t1, pfp_mp_i, pfp_mp_f
         ) VALUES (
-            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
         );
         """
 
@@ -254,6 +256,7 @@ class PR1_db(pr1_export.PR1_base):
                 anum, row.time, self.inst_num, sid, row.site_num, row.type, row.port,
                 row.standard_num, row.serial_num, row.event, row.lab_num, pnum,
                 self.NULL(row.area), self.NULL(row.ht), self.NULL(row.w), self.NULL(row.rt),
+                self.NULL(row.start_level), self.NULL(row.end_level),
                 self.NULL(row.psamp), self.NULL(row.psamp0), self.NULL(row.psampnet), self.NULL(row.T1),
                 self.NULL(row.PFP_mp_i), self.NULL(row.PFP_mp_f)
             )
@@ -410,7 +413,8 @@ class PR1_db(pr1_export.PR1_base):
     def tmptbl_update_ancillary_data(self):
         # Inserts or updates four parameters p, p0, pnet, and t1 into the ancillary_data table
         # added PFP_mp_i and PFP_mp_f
-        parameters = [(9, 'pfp_mp_f'), (10, 'pfp_mp_i'), (26, 'pnet'), (27, 'p0'), (28, 'p'), (29, 't1')]
+        parameters = [(9, 'pfp_mp_f'), (10, 'pfp_mp_i'), (26, 'pnet'), (27, 'p0'), (28, 'p'), (29, 't1'),
+                      (31, 'start_level'), (32, 'end_level')]
 
         for param_num, column in parameters:
             sql = f"""
