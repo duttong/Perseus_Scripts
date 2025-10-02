@@ -134,8 +134,7 @@ class PR1_db(pr1_export.PR1_base):
         df['psampnet'] = pd.to_numeric(df["psamp"], errors='coerce', downcast="float") - pd.to_numeric(df["psamp0"], errors='coerce', downcast="float")
 
         # load pfp.log data if not loaded yet
-        if self.pfplogs.empty:
-            self.pfplogs = self.load_pfp_logs()
+        self.pfplogs = self.load_pfp_logs()
 
         # sync pfp.log data to gcwerks data.
         df['dt'] = pd.to_datetime(df['time'])
@@ -157,8 +156,8 @@ class PR1_db(pr1_export.PR1_base):
         pfp_vars = []
         for pfplog in self.pfplogs_path.glob('????'):
             # the 1409 file has different columns than the other files. Skip it for now.
-            if pfplog.name != '1409': 
-                pfp = pd.read_csv(pfplog, sep="\s+", 
+            if pfplog.name != '1409':
+                pfp = pd.read_csv(pfplog, sep="\s+", skiprows=1,
                                   names=['date', 'time', 'pfp_sn', 'Flask', 'PFP_mp_i', 'PFP_mp_f'])
                 pfp_vars.append(pfp)
 
@@ -176,12 +175,13 @@ class PR1_db(pr1_export.PR1_base):
         pfps['dt'] = pd.to_datetime(pfps['date'].astype(str) + pfps['time'].astype(str), format='%y%m%d%H%M')
 
         # drop rows where the Flask is nan
-        pfps = pfps[pfps['Flask'].str.isnumeric()]
+        #pfps = pfps[pfps['Flask'].str.isnumeric()]
         
-        pfps['PFP_mp_i'] = pfps['PFP_mp_i'].astype(float)
-        pfps['PFP_mp_f'] = pfps['PFP_mp_f'].astype(float)
+        pfps['PFP_mp_i'] = pd.to_numeric(pfps['PFP_mp_i'], errors='coerce')
+        pfps['PFP_mp_f'] = pd.to_numeric(pfps['PFP_mp_f'], errors='coerce')
 
-        return pfps[['dt', 'pfp_sn', 'Flask', 'PFP_mp_i', 'PFP_mp_f']]
+        pfps = pfps[['dt', 'pfp_sn', 'Flask', 'PFP_mp_i', 'PFP_mp_f']].sort_values(by='dt').reset_index(drop=True)
+        return pfps
 
     def tmptbl_create(self):
         """ Create a temporary table for manipulation and insertion. 
