@@ -308,10 +308,10 @@ class PR1_db(pr1_export.PR1_base):
         """
         '''
         sql = f"""
-            update t_data t 
-            join {self.analysis_table} a on t.analysis_datetime = a.analysis_datetime 
-            AND t.inst_num = a.inst_num AND t.sample_id = a.sample_id
-            set t.analysis_num=a.num;
+            UPDATE t_data t 
+            JOIN {self.analysis_table} a on t.analysis_datetime = a.analysis_datetime 
+            AND t.inst_num=a.inst_num
+            SET t.analysis_num=a.num;
         """
         #print(self.db.doquery("Select count(*) from t_data;", numRows=0))
         self.db.doquery(sql)
@@ -362,7 +362,8 @@ class PR1_db(pr1_export.PR1_base):
         sql = f"""
             UPDATE hats.{self.analysis_table} a, t_data t 
             SET a.standards_num=t.standards_num, a.std_serial_num=t.std_serial_num, 
-                a.port=t.port, a.sample_type=t.sample_type
+                a.port=t.port, a.sample_type=t.sample_type, a.site_num=t.site_num,
+                a.sample_ID=t.sample_ID, a.event_num=t.event_num, a.lab_num=t.lab_num
             WHERE a.num=t.analysis_num and t.analysis_num!=0
         """
         updated = self.db.doquery(sql)
