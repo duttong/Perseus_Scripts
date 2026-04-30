@@ -237,10 +237,6 @@ class PR1_db(pr1_export.PR1_base):
     def tmptbl_fill(self, df):
         """ Create and fill the temporary table with data from the df """
 
-        if df is None or df.empty:
-            print("No data available to insert.")
-            return
-
         self.tmptbl_create()    # create temporary table
 
         sql_insert = """ 
@@ -276,8 +272,6 @@ class PR1_db(pr1_export.PR1_base):
                 self.NULL(row.psamp), self.NULL(row.psamp0), self.NULL(row.psampnet), self.NULL(row.T1),
                 self.NULL(row.PFP_mp_i), self.NULL(row.PFP_mp_f)
             )
-            
-            print(f"p0: {p0}")
 
             if row.type != 'unknown' and row.type != 'TEST':
                 params.append(p0)
