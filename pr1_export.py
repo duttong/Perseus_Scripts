@@ -10,6 +10,8 @@ from tqdm import tqdm
 
 class PR1_base:
     inst_num = 58  # PR1
+    pr1_inst_num = 58
+    pr2_inst_num = 238
     gcexport_path = "/hats/gc/gcwerks-3/bin/gcexport"
     export_dir = Path("/hats/gc/pr1/results")
 
@@ -18,6 +20,12 @@ class PR1_base:
         import db_utils.db_conn as db_conn
         self.db = db_conn.HATS_ng()
         self.molecules = self.pr1_molecules()
+        self.pr1_start_date = '20150601'        # data before this date is not used.
+        self.pr2_start_date = '20260423'
+        self.instrument_history = sorted([
+            (pd.to_datetime(self.pr1_start_date), self.pr1_inst_num),
+            (pd.to_datetime(self.pr2_start_date), self.pr2_inst_num)
+        ], key=lambda x: x[0])
     
     def gml_sites(self):
         """Returns a dictionary of site codes and site numbers from gmd.site."""

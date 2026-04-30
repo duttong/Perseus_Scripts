@@ -11,7 +11,6 @@ class PR1_db(pr1_export.PR1_base):
 
     def __init__(self):
         super().__init__()
-        self.pr1_start_date = '20150601'        # data before this date is not used.
         self.gcwerks_results = self.export_dir  # Path type
         self.sites = self.gml_sites()           # site codes and numbers
         self.analytes = self.pr1_analytes()     # PR1 analytes (dict of molecule and parameter number)
@@ -60,10 +59,14 @@ class PR1_db(pr1_export.PR1_base):
         else:
             df = df.loc[start_dt:stop_dt]
 
+        if df.empty:
+            print(f"No data found for {gas} in the specified date range.")
+            return df
+
         # trim the last two rows if area and height are nan (this happens when the chrom is not finished)
-        if pd.isna(df.iloc[-2]['area']) & pd.isna(df.iloc[-2]['ht']):
+        if len(df) >= 2 and pd.isna(df.iloc[-2]['area']) and pd.isna(df.iloc[-2]['ht']):
             df = df[:-2]
-        elif pd.isna(df.iloc[-1]['area']) & pd.isna(df.iloc[-1]['ht']):
+        elif len(df) >= 1 and pd.isna(df.iloc[-1]['area']) and pd.isna(df.iloc[-1]['ht']):
             df = df[:-1]
 
         # insure there are no duplicate index rows
@@ -93,7 +96,7 @@ class PR1_db(pr1_export.PR1_base):
         df.loc[df['sample'].str.count('-') == 1, 'sample_ID'] = df['sample'].str.extract(pattern)[1]
         # two dashes in sample
         # SMO-1223-34333 and BLD-badtestA-00
-        pattern = r'^([A-Z]{3})-([A-Za-z0-9]+)-?([A-Za-z0-9]+)?$'
+        pattern = r'^([A-Z]{3})-([A-Za-z0-9_]+)-?([A-Za-z0-9]+)?$'
         extracted = df['sample'].str.extract(pattern)
         df.loc[(df['sample'].str.count('-') == 2), 'site'] = extracted[0]
         df.loc[(df['sample'].str.count('-') == 2), 'sample_ID'] = extracted[1] + "-" + extracted[2]
@@ -234,6 +237,10 @@ class PR1_db(pr1_export.PR1_base):
     def tmptbl_fill(self, df):
         """ Create and fill the temporary table with data from the df """
 
+        if df is None or df.empty:
+            print("No data available to insert.")
+            return
+
         self.tmptbl_create()    # create temporary table
 
         sql_insert = """ 
@@ -249,22 +256,34 @@ class PR1_db(pr1_export.PR1_base):
         pnum = df['pnum'].values[0]     # parameter number
 
         params = []
+  
         for _, row in df.iterrows():
             anum = 0
             sid = row.sample_ID if not pd.isnull(row.sample_ID) else ''
+            
+            analysis_dt = pd.to_datetime(row.time)
+            
+            inst_num = self.instrument_history[0][1]
+            for start_date, i_num in self.instrument_history:
+                if analysis_dt >= start_date:
+                    inst_num = i_num
+
             p0 = (
-                anum, row.time, self.inst_num, sid, row.site_num, row.type, row.port,
+                anum, row.time, inst_num, sid, row.site_num, row.type, row.port,
                 row.standard_num, row.serial_num, row.event, row.lab_num, pnum,
                 self.NULL(row.area), self.NULL(row.ht), self.NULL(row.w), self.NULL(row.rt),
                 self.NULL(row.start_level), self.NULL(row.end_level),
                 self.NULL(row.psamp), self.NULL(row.psamp0), self.NULL(row.psampnet), self.NULL(row.T1),
                 self.NULL(row.PFP_mp_i), self.NULL(row.PFP_mp_f)
             )
+            
+            print(f"p0: {p0}")
+
             if row.type != 'unknown' and row.type != 'TEST':
                 params.append(p0)
                 if self.db.doMultiInsert(sql_insert, params): 
                     params=[]
-
+                
         self.db.doMultiInsert(sql_insert, params, all=True)
 
         self.tmptbl_get_eventnum()       # get event_num info from ccgg.flask_event table
@@ -307,10 +326,13 @@ class PR1_db(pr1_export.PR1_base):
             );
         """
         '''
+        inst_nums = [str(i_num) for _, i_num in self.instrument_history]
+        inst_nums_str = ', '.join(inst_nums)
+
         sql = f"""
             UPDATE t_data t 
             JOIN {self.analysis_table} a on t.analysis_datetime = a.analysis_datetime 
-            AND t.inst_num=a.inst_num
+            AND a.inst_num IN ({inst_nums_str})
             SET t.analysis_num=a.num;
         """
         #print(self.db.doquery("Select count(*) from t_data;", numRows=0))
@@ -344,7 +366,8 @@ class PR1_db(pr1_export.PR1_base):
             FROM t_data t
             WHERE analysis_num = 0
             ON DUPLICATE KEY UPDATE 
-                event_num=t.event_num;
+                event_num=t.event_num,
+                inst_num=t.inst_num;
         """
         inserted = self.db.doquery(sql)
 
@@ -363,7 +386,8 @@ class PR1_db(pr1_export.PR1_base):
             UPDATE hats.{self.analysis_table} a, t_data t 
             SET a.standards_num=t.standards_num, a.std_serial_num=t.std_serial_num, 
                 a.port=t.port, a.sample_type=t.sample_type, a.site_num=t.site_num,
-                a.sample_ID=t.sample_ID, a.event_num=t.event_num, a.lab_num=t.lab_num
+                a.sample_ID=t.sample_ID, a.event_num=t.event_num, a.lab_num=t.lab_num,
+                a.inst_num=t.inst_num
             WHERE a.num=t.analysis_num and t.analysis_num!=0
         """
         updated = self.db.doquery(sql)
@@ -477,15 +501,17 @@ def main():
     for n, gas in enumerate(molecules):
         df = pr1.load_gcwerks(gas, start_date)
         #print(df.loc[df['time'] > '2024-08-28 03:11:00'])
-        pr1.tmptbl_fill(df)             # create and fill in temp data table with GCwerks results
+        
+        if df is not None and not df.empty:
+            pr1.tmptbl_fill(df)             # create and fill in temp data table with GCwerks results
 
-        #tmp = pd.DataFrame(pr1.tmptbl_output())
-        #print(tmp.loc[tmp.analysis_num >= 317010][['analysis_datetime', 'analysis_num', 'sample_type']])
+            #tmp = pd.DataFrame(pr1.tmptbl_output())
+            #print(tmp.loc[tmp.analysis_num >= 317010][['analysis_datetime', 'analysis_num', 'sample_type']])
 
-        pr1.tmptbl_update_flags_internal()  # need to call this before analysis rows are added.
-        pr1.tmptbl_update_analysis()    # insert and update any rows in hats.analysis with new data
-        pr1.tmptbl_update_raw_data()    # update the hats.raw_data table with area, ht, w, rt
-        pr1.tmptbl_update_ancillary_data()  # updates the hats.ancillary table with p, p0, pnet, and t1 values
+            pr1.tmptbl_update_flags_internal()  # need to call this before analysis rows are added.
+            pr1.tmptbl_update_analysis()    # insert and update any rows in hats.analysis with new data
+            pr1.tmptbl_update_raw_data()    # update the hats.raw_data table with area, ht, w, rt
+            pr1.tmptbl_update_ancillary_data()  # updates the hats.ancillary table with p, p0, pnet, and t1 values
 
 
 if __name__ == '__main__':
