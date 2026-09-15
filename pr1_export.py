@@ -8,18 +8,26 @@ from pathlib import Path
 import pandas as pd
 from tqdm import tqdm
 
-class PR1_base:
-    inst_num = 58  # PR1
+class PRS_base:
+    """Shared configuration for the Perseus (PRS) instrument system.
+
+    PRS consists of PR1 and PR2. They use the same GCwerks installation and
+    analyte definition; the HATS instrument number is selected by timestamp.
+    """
+
+    system_name = 'PRS'
+    inst_num = 58  # PR1 is the analyte-list source for the PRS system
     pr1_inst_num = 58
     pr2_inst_num = 238
     gcexport_path = "/hats/gc/gcwerks-3/bin/gcexport"
+    gcwerks_dir = Path("/data/Perseus-1")
     export_dir = Path("/hats/gc/pr1/results")
 
     def __init__(self):
         sys.path.append('/ccg/src/db/')
         import db_utils.db_conn as db_conn
         self.db = db_conn.HATS_ng()
-        self.molecules = self.pr1_molecules()
+        self.molecules = self.prs_molecules()
         self.pr1_start_date = '20150601'        # data before this date is not used.
         self.pr2_start_date = '20260423'
         self.instrument_history = sorted([
@@ -34,24 +42,29 @@ class PR1_base:
         site_dict = dict(zip(df['code'], df['num']))
         return site_dict
 
-    def pr1_standards(self):
+    def prs_standards(self):
         """Returns a dictionary of standards files and a key used in the HATS db."""
         sql = "SELECT num, serial_number, std_ID FROM hats.standards"
         df = pd.DataFrame(self.db.doquery(sql))
         standards_dict = df.set_index('std_ID')[['num', 'serial_number']].T.to_dict('list')
         return standards_dict
 
-    def pr1_analytes(self):
-        """Returns a dictionary of PR1 analytes and parameter numbers."""
+    def prs_analytes(self):
+        """Returns a dictionary of PRS analytes and parameter numbers."""
         sql = f"SELECT param_num, display_name FROM hats.analyte_list WHERE inst_num = {self.inst_num}"
         df = pd.DataFrame(self.db.doquery(sql))
         analytes_dict = dict(zip(df['display_name'], df['param_num']))
         #analytes_dict['12-DCE'] = analytes_dict['1,2-DCE']
         return analytes_dict
     
-    def pr1_molecules(self):
-        analytes = self.pr1_analytes()
+    def prs_molecules(self):
+        analytes = self.prs_analytes()
         return list(analytes.keys())
+
+    # Keep these names for callers outside this repository.
+    pr1_standards = prs_standards
+    pr1_analytes = prs_analytes
+    pr1_molecules = prs_molecules
 
     @staticmethod
     def convert_date_format(date_str):
@@ -77,7 +90,7 @@ class PR1_base:
         
         return yymm
 
-class PR1_GCwerks_Export(PR1_base):
+class PRS_GCwerks_Export(PRS_base):
 
     def __init__(self):
         super().__init__()
@@ -96,7 +109,7 @@ class PR1_GCwerks_Export(PR1_base):
                 filename = f"data_{molecule}.csv"
                 params = f"time runtype tank stdtank port psamp0 psamp T1 {molecule}.area {molecule}.ht {molecule}.rt {molecule}.w {molecule}.start_level {molecule}.end_level"
                 # params_extra = f"{params} {molecule}.skew {molecule}.rl.a {molecule}.rl.ht {molecule}.rl.report {molecule}.c.a {molecule}.c.ht {molecule}.c.report"
-                command = f"{self.gcexport_path} /data/Perseus-1 -csv -nonan -mindate {start_date} {params} > {self.export_dir}/{filename}"
+                command = f"{self.gcexport_path} {self.gcwerks_dir} -csv -nonan -mindate {start_date} {params} > {self.export_dir}/{filename}"
                 #subprocess.run(command, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
 
                 # Execute the command and redirect output to /dev/null
@@ -105,10 +118,15 @@ class PR1_GCwerks_Export(PR1_base):
             else:
                 print(f'Wrong molecule name: {molecule}')
 
-        for process, molecule in tqdm(processes):
+        total = len(processes)
+        for completed, (process, molecule) in enumerate(tqdm(processes), start=1):
+            returncode = process.wait()
+            if returncode:
+                print(f'GCwerks export failed for {molecule} (exit status {returncode}).')
+            else:
+                print(f'Exported {molecule} ({completed}/{total}).')
             if progress:
-                progress(10)
-            process.wait()
+                progress(int(completed / total * 100))
 
         """
         # convert 1,2-DCE file to the name 12-DCE. The old name causes problems due to the comma.
@@ -156,8 +174,8 @@ class PR1_GCwerks_Export(PR1_base):
 
     @staticmethod
     def main():
-        pr1_export = PR1_GCwerks_Export()
-        default_molecules = list(pr1_export.molecules)
+        prs_export = PRS_GCwerks_Export()
+        default_molecules = list(prs_export.molecules)
         
         parser = argparse.ArgumentParser(description='Export Perseus data with specified start date.')
         parser.add_argument('start_date', type=str, nargs='?', default='2201',
@@ -171,10 +189,15 @@ class PR1_GCwerks_Export(PR1_base):
             print(f"Valid molecule names: {', '.join(default_molecules)}")
             quit()
 
-        molecules = pr1_export.parse_molecules(args.molecules)     # returns a list of molecules
-        start_date = pr1_export.verify_start_date(args.start_date)
-        pr1_export.export_gc_data(start_date, molecules)
+        molecules = prs_export.parse_molecules(args.molecules)     # returns a list of molecules
+        start_date = prs_export.verify_start_date(args.start_date)
+        prs_export.export_gc_data(start_date, molecules)
+
+
+# Compatibility aliases: the executable/module name remains pr1_export.py.
+PR1_base = PRS_base
+PR1_GCwerks_Export = PRS_GCwerks_Export
 
 
 if __name__ == '__main__':
-    PR1_GCwerks_Export.main()
+    PRS_GCwerks_Export.main()

@@ -7,13 +7,13 @@ from pathlib import Path
 
 import pr1_export
 
-class PR1_db(pr1_export.PR1_base):
+class PRS_db(pr1_export.PRS_base):
 
     def __init__(self):
         super().__init__()
         self.gcwerks_results = self.export_dir  # Path type
         self.sites = self.gml_sites()           # site codes and numbers
-        self.analytes = self.pr1_analytes()     # PR1 analytes (dict of molecule and parameter number)
+        self.analytes = self.prs_analytes()     # PRS analytes (dict of molecule and parameter number)
         self.analysis_table = 'analysis'        # set to a table like analysis_gsd for debugging
         self.raw_data_table = 'raw_data'        # raw_data_gsd for degugging
         self.ancillary_table = 'ancillary_data' # ancillary_data_gsd for debugging
@@ -113,7 +113,7 @@ class PR1_db(pr1_export.PR1_base):
         df['site_num'] = df['site'].map(self.sites).fillna(0).astype(int)
 
         # Data processing steps...
-        standards = self.pr1_standards()
+        standards = self.prs_standards()
         standards_num = {k: v[0] for k, v in standards.items()}
         standards_sn = {k: v[1] for k, v in standards.items()}
         # standardized serial number
@@ -256,6 +256,7 @@ class PR1_db(pr1_export.PR1_base):
         pnum = df['pnum'].values[0]     # parameter number
 
         params = []
+        staged_rows = 0
   
         for _, row in df.iterrows():
             anum = 0
@@ -277,14 +278,14 @@ class PR1_db(pr1_export.PR1_base):
                 self.NULL(row.PFP_mp_i), self.NULL(row.PFP_mp_f)
             )
             
-            print(f"p0: {p0}")
-
             if row.type != 'unknown' and row.type != 'TEST':
                 params.append(p0)
+                staged_rows += 1
                 if self.db.doMultiInsert(sql_insert, params): 
                     params=[]
                 
         self.db.doMultiInsert(sql_insert, params, all=True)
+        print(f'Staged {staged_rows} {self.system_name} records for database update.')
 
         self.tmptbl_get_eventnum()       # get event_num info from ccgg.flask_event table
         self.tmptbl_get_analnum()        # fill in previous anaysis data
@@ -471,13 +472,17 @@ def parse_molecules(molecules):
     return []
 
 
+# Compatibility alias for existing command-line and external callers.
+PR1_db = PRS_db
+
+
 def main():
-    pr1 = PR1_db()
+    prs = PRS_db()
 
     parser = argparse.ArgumentParser(description='Insert Perseus GCwerks data into HATS db for selected date range. If no start_date \
                                      is specifide then work on the last 30 days of data.')
     parser.add_argument('date', nargs='?', default=get_default_date(), help='Date in the format YYMM')
-    parser.add_argument('-m', '--molecules', type=str, default=pr1.molecules,
+    parser.add_argument('-m', '--molecules', type=str, default=prs.molecules,
                         help='Comma-separated list of molecules. Add quotes around the list if spaces are used. Default all molecules.')
     parser.add_argument('-x', '--extract', action='store_true', help='Re-extract data from GCwerks first.')
     parser.add_argument('--list', action='store_true', help='List all available molecule names.')
@@ -485,7 +490,7 @@ def main():
     args = parser.parse_args()
 
     if args.list:
-        molecules_c = [m.replace(',', '') for m in pr1.molecules]       # remove commas from mol names
+        molecules_c = [m.replace(',', '') for m in prs.molecules]       # remove commas from mol names
         print(f"Valid molecule names: {', '.join(molecules_c)}")
         quit()
     
@@ -496,22 +501,22 @@ def main():
     print("Processing the following molecules: ", molecules)
 
     if args.extract:
-        pr1_export.PR1_GCwerks_Export().export_gc_data(start_date, molecules)
+        pr1_export.PRS_GCwerks_Export().export_gc_data(start_date, molecules)
     
     for n, gas in enumerate(molecules):
-        df = pr1.load_gcwerks(gas, start_date)
+        df = prs.load_gcwerks(gas, start_date)
         #print(df.loc[df['time'] > '2024-08-28 03:11:00'])
         
         if df is not None and not df.empty:
-            pr1.tmptbl_fill(df)             # create and fill in temp data table with GCwerks results
+            prs.tmptbl_fill(df)             # create and fill in temp data table with GCwerks results
 
             #tmp = pd.DataFrame(pr1.tmptbl_output())
             #print(tmp.loc[tmp.analysis_num >= 317010][['analysis_datetime', 'analysis_num', 'sample_type']])
 
-            pr1.tmptbl_update_flags_internal()  # need to call this before analysis rows are added.
-            pr1.tmptbl_update_analysis()    # insert and update any rows in hats.analysis with new data
-            pr1.tmptbl_update_raw_data()    # update the hats.raw_data table with area, ht, w, rt
-            pr1.tmptbl_update_ancillary_data()  # updates the hats.ancillary table with p, p0, pnet, and t1 values
+            prs.tmptbl_update_flags_internal()  # need to call this before analysis rows are added.
+            prs.tmptbl_update_analysis()    # insert and update any rows in hats.analysis with new data
+            prs.tmptbl_update_raw_data()    # update the hats.raw_data table with area, ht, w, rt
+            prs.tmptbl_update_ancillary_data()  # updates the hats.ancillary table with p, p0, pnet, and t1 values
 
 
 if __name__ == '__main__':
