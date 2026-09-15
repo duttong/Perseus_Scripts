@@ -67,34 +67,61 @@ class UpdateWorker(QObject):
         try:
             with contextlib.redirect_stdout(SignalOutput(self.message)):
                 db = PRS_db()
-                total_steps = len(self.gases) * (2 if self.extract_first else 1)
-                completed_steps = 0
+                # Each gas has six database milestones: read its CSV, stage
+                # rows, then update flags, analysis, raw, and ancillary data.
+                # Exporting, when requested, adds one milestone per gas.
+                units_per_gas = 6 + (1 if self.extract_first else 0)
+                total_units = len(self.gases) * units_per_gas
+                completed_units = 0
+                last_progress = -1
+
+                def report_progress(percent):
+                    nonlocal last_progress
+                    percent = int(percent)
+                    if percent != last_progress:
+                        self.progress.emit(percent)
+                        last_progress = percent
+
+                def advance(units=1):
+                    nonlocal completed_units
+                    completed_units += units
+                    report_progress(completed_units / total_units * 100)
 
                 if self.extract_first:
                     self.message.emit(f'Exporting {len(self.gases)} analytes from GCwerks...\n')
 
                     def export_progress(percent):
-                        self.progress.emit(int(percent / 100 * len(self.gases) / total_steps * 100))
+                        export_units = percent / 100 * len(self.gases)
+                        report_progress(export_units / total_units * 100)
 
                     PRS_GCwerks_Export().export_gc_data(
                         self.start_date, self.gases, progress=export_progress)
-                    completed_steps = len(self.gases)
-                    self.progress.emit(int(completed_steps / total_steps * 100))
+                    advance(len(self.gases))
 
                 for gas in self.gases:
-                    self.message.emit(f'Loading {gas} from {self.start_date} to {self.end_date}...\n')
+                    self.message.emit(f'Reading {gas} from {self.start_date} to {self.end_date}...\n')
                     df = db.load_gcwerks(gas, self.start_date, self.end_date)
+                    advance()
                     if df is None or df.empty:
                         self.message.emit(f'No rows to update for {gas}; skipped.\n')
+                        advance(5)
                     else:
+                        self.message.emit(f'Staging {gas} rows...\n')
                         db.tmptbl_fill(df)
+                        advance()
+                        self.message.emit(f'Updating internal flags for {gas}...\n')
                         db.tmptbl_update_flags_internal()
+                        advance()
+                        self.message.emit(f'Updating analysis records for {gas}...\n')
                         db.tmptbl_update_analysis()
+                        advance()
+                        self.message.emit(f'Updating raw peak data for {gas}...\n')
                         db.tmptbl_update_raw_data()
+                        advance()
+                        self.message.emit(f'Updating ancillary data for {gas}...\n')
                         db.tmptbl_update_ancillary_data()
+                        advance()
                         self.message.emit(f'Done inserting {gas} data.\n')
-                    completed_steps += 1
-                    self.progress.emit(int(completed_steps / total_steps * 100))
         except Exception:
             self.failed.emit(traceback.format_exc())
         finally:
