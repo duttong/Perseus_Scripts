@@ -123,10 +123,12 @@ class RunFiles:
     def dir_for(self, year, key):
         return self.root / year / SUBDIRS[key]
 
-    def search(self, term, years):
-        """Return {(year, name): set(of subdir keys containing it)} for names containing term (case-insensitive)."""
-        term = term.lower()
+    def search(self, terms, years):
+        """Find names containing any of terms (case-insensitive).
+        Returns ({(year, name): set(of subdir keys containing it)}, {term: number of runs matched})."""
+        lowered = [(t, t.lower()) for t in terms]
         found = {}
+        matched = {t: set() for t in terms}
         for year in years:
             for key in SUBDIRS:
                 d = self.dir_for(year, key)
@@ -134,9 +136,13 @@ class RunFiles:
                     continue
                 with os.scandir(d) as it:
                     for entry in it:
-                        if term in entry.name.lower() and entry.is_file():
+                        name = entry.name.lower()
+                        hits = [t for t, low in lowered if low in name]
+                        if hits and entry.is_file():
                             found.setdefault((year, entry.name), set()).add(key)
-        return found
+                            for t in hits:
+                                matched[t].add((year, entry.name))
+        return found, {t: len(m) for t, m in matched.items()}
 
     def locations(self, year, name):
         """Subdir keys in which year/name currently exists."""
@@ -383,6 +389,7 @@ class RenameGUI(QWidget):
         self.opslog = opslog
         self.gcwerks_bin = gcwerks_bin
         self.initials = ''
+        self.found = {}  # the run list: {(year, name): set(of subdir keys)}
         self.setWindowTitle('Rename Perseus-1 Chromatograms, Strip-charts and Run Logs')
         self.resize(900, 650)
 
@@ -391,7 +398,8 @@ class RenameGUI(QWidget):
         search_row = QHBoxLayout()
         search_row.addWidget(QLabel('Search:'))
         self.search_box = QLineEdit()
-        self.search_box.setPlaceholderText('Any part of the file name, e.g. CC304855 or 14701')
+        self.search_box.setPlaceholderText('Any part of the file name; separate several with commas, '
+                                           'e.g. CC304855, 14701')
         self.search_box.returnPressed.connect(self.do_search)
         search_row.addWidget(self.search_box, stretch=1)
         search_row.addWidget(QLabel('Year:'))
@@ -400,11 +408,20 @@ class RenameGUI(QWidget):
         self.year_box.addItems(years + [ALL_YEARS])
         search_row.addWidget(self.year_box)
         search_btn = QPushButton('Search')
+        search_btn.setToolTip('Start a new list with the runs matching these terms')
         search_btn.clicked.connect(self.do_search)
         search_row.addWidget(search_btn)
+        add_btn = QPushButton('Add to List')
+        add_btn.setToolTip('Add the runs matching these terms to the current list')
+        add_btn.clicked.connect(lambda: self.do_search(add=True))
+        search_row.addWidget(add_btn)
+        clear_btn = QPushButton('Clear List')
+        clear_btn.clicked.connect(self.clear_list)
+        search_row.addWidget(clear_btn)
         layout.addLayout(search_row)
 
-        self.status = QLabel('Enter a search term and press Search.')
+        self.status = QLabel('Enter search terms and press Search. Use Add to List to add more searches.')
+        self.status.setWordWrap(True)
         layout.addWidget(self.status)
 
         self.results = QListWidget()
@@ -422,10 +439,15 @@ class RenameGUI(QWidget):
         bottom.addWidget(self.rename_btn)
         layout.addLayout(bottom)
 
-    def do_search(self):
-        term = self.search_box.text().strip()
-        self.results.clear()
-        if not term:
+    def do_search(self, add=False):
+        """Search for the comma-separated terms. add=False starts a new list, add=True adds to it."""
+        # Split on commas (and newlines, for pasted columns); drop blanks and repeats (ignoring case).
+        terms = {}
+        for t in re.split(r'[,\n]', self.search_box.text()):
+            if t.strip():
+                terms.setdefault(t.strip().lower(), t.strip())
+        terms = list(terms.values())
+        if not terms:
             self.status.setText('Please enter a search term.')
             return
         year = self.year_box.currentText()
@@ -433,35 +455,61 @@ class RenameGUI(QWidget):
 
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
-            found = self.files.search(term, years)
+            found, counts = self.files.search(terms, years)
         finally:
             QApplication.restoreOverrideCursor()
 
-        keys = sorted(found, key=lambda k: (k[0], k[1]))
-        for year, name in keys[:MAX_RESULTS]:
-            where = found[(year, name)]
+        before = len(self.found) if add else 0
+        if add:
+            for key, where in found.items():
+                self.found.setdefault(key, set()).update(where)
+        else:
+            self.found = found
+        self.show_list(keep_selection=add)
+
+        per_term = ', '.join(f'{t}: {n}' for t, n in counts.items())
+        msg = f'Matches per term ({year}) - {per_term}.'
+        missing = [t for t, n in counts.items() if n == 0]
+        if missing:
+            msg += f'  NO MATCHES for: {", ".join(missing)}.'
+        if add:
+            msg += f'  Added {len(self.found) - before} new run(s).'
+        msg += f'  {len(self.found)} run(s) in list.'
+        self.status.setText(msg)
+
+    def clear_list(self):
+        self.found = {}
+        self.show_list()
+        self.status.setText('List cleared.')
+
+    def show_list(self, keep_selection=False, select=()):
+        """Redraw the list from self.found, re-selecting the previously selected runs (and any in select)."""
+        selected = set(select)
+        if keep_selection:
+            selected.update(item.data(Qt.UserRole) for item in self.results.selectedItems())
+        self.results.clear()
+        for year, name in sorted(self.found)[:MAX_RESULTS]:
+            where = self.found[(year, name)]
             text = f'{year}   {name}'
             if len(where) < len(SUBDIRS):
                 text += f'    (only in: {", ".join(k for k in SUBDIRS if k in where)})'
             item = QListWidgetItem(text)
             item.setData(Qt.UserRole, (year, name))
             self.results.addItem(item)
-
-        msg = f'{len(found)} matching run(s).'
-        if len(found) > MAX_RESULTS:
-            msg += f' Showing the first {MAX_RESULTS}; narrow the search.'
-        msg += ' Ctrl-click or Shift-click to select several.'
-        self.status.setText(msg)
+            item.setSelected((year, name) in selected)
+        if len(self.found) > MAX_RESULTS:
+            self.results.addItem(f'... only the first {MAX_RESULTS} of {len(self.found)} runs are shown; '
+                                 'narrow the search.')
         self.update_selected_count()
 
     def update_selected_count(self):
-        n = len(self.results.selectedItems())
+        n = len([i for i in self.results.selectedItems() if i.data(Qt.UserRole)])
         self.selected_label.setText(f'{n} selected')
         self.rename_btn.setEnabled(n > 0)
 
     def provide_names(self):
-        selections = [item.data(Qt.UserRole) for item in self.results.selectedItems()]
-        selections.sort()
+        selections = sorted(item.data(Qt.UserRole) for item in self.results.selectedItems()
+                            if item.data(Qt.UserRole))
         previous = None
         while True:
             dlg = NewNamesDialog(selections, self, previous, self.initials)
@@ -484,11 +532,12 @@ class RenameGUI(QWidget):
             # "Return to Editing": loop back with the names the user typed.
 
     def commit(self, renames):
-        ok, failed, log_lines = [], [], []
+        ok, failed, log_lines, succeeded = [], [], [], []
         for year, old, new in renames:
             try:
                 done = self.files.rename(year, old, new)
                 ok.append(f'{year}/{old}  ->  {new}')
+                succeeded.append((year, old, new))
                 line = f'{year}/{old} -> {new}'
                 if len(done) < len(SUBDIRS):
                     line += f'  (only in: {", ".join(done)})'
@@ -506,10 +555,23 @@ class RenameGUI(QWidget):
             QMessageBox.critical(self, 'Rename finished with errors', msg)
         else:
             QMessageBox.information(self, 'Rename complete', msg)
-        self.do_search()
+        self.refresh_after_rename(succeeded)
 
         if ok:
             self.ask_gcwerks_reset()
+
+    def refresh_after_rename(self, renames):
+        """Update the list in place: renamed runs show their new names (still selected)."""
+        renamed = {(y, old): (y, new) for y, old, new in renames}
+        new_found = {}
+        for key in self.found:
+            key = renamed.get(key, key)
+            where = set(self.files.locations(*key))
+            if where:
+                new_found[key] = where
+        self.found = new_found
+        self.show_list(select=renamed.values())
+        self.status.setText(f'{len(self.found)} run(s) in list. Renamed runs are shown with their new names.')
 
     def ask_gcwerks_reset(self):
         answer = QMessageBox.question(
