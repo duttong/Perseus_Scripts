@@ -255,6 +255,10 @@ class PRS_db(pr1_export.PRS_base):
     def tmptbl_fill(self, df):
         """ Create and fill the temporary table with data from the df """
 
+        if df is None or df.empty:
+            print("No data available to insert.")
+            return
+
         self.tmptbl_create()    # create temporary table
 
         sql_insert = """ 
