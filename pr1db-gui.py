@@ -1,25 +1,135 @@
 #! /usr/bin/env python
 
+import contextlib
 import sys
-import time
+import traceback
 import concurrent.futures
 import argparse
+import re
 from datetime import datetime, timedelta
 
-from PyQt5.QtWidgets import (QApplication, QWidget, QLabel, QLineEdit, QCheckBox, 
+from PyQt5.QtCore import QObject, QThread, pyqtSignal
+from PyQt5.QtWidgets import (QApplication, QWidget, QLabel, QLineEdit, QCheckBox,
                              QPushButton, QVBoxLayout, QHBoxLayout, QListWidget, 
                              QTextEdit, QProgressBar)
 from PyQt5.QtGui import QTextCursor, QKeySequence
 
-from pr1_export import PR1_GCwerks_Export
-from pr1_gcwerks2db import PR1_db
+from pr1_export import PRS_GCwerks_Export
+from pr1_gcwerks2db import PRS_db
 
 
-class PR1_DBGUI():
+class SignalOutput:
+    """File-like object that safely forwards worker output to the GUI."""
+
+    def __init__(self, signal):
+        self.signal = signal
+
+    def write(self, message):
+        if message:
+            self.signal.emit(message)
+
+    def flush(self):
+        pass
+
+
+class AnalyteWorker(QObject):
+    message = pyqtSignal(str)
+    ready = pyqtSignal(list)
+    failed = pyqtSignal(str)
+    finished = pyqtSignal()
+
+    def run(self):
+        try:
+            self.message.emit('Connecting to the HATS database and loading PRS analytes...\n')
+            db = PRS_db()
+            self.ready.emit(sorted(db.analytes))
+            self.message.emit(f'Loaded {len(db.analytes)} analytes.\n')
+        except Exception:
+            self.failed.emit(traceback.format_exc())
+        finally:
+            self.finished.emit()
+
+
+class UpdateWorker(QObject):
+    message = pyqtSignal(str)
+    progress = pyqtSignal(int)
+    failed = pyqtSignal(str)
+    finished = pyqtSignal()
+
+    def __init__(self, gases, start_date, end_date, extract_first):
+        super().__init__()
+        self.gases = gases
+        self.start_date = start_date
+        self.end_date = end_date
+        self.extract_first = extract_first
+
+    def run(self):
+        try:
+            with contextlib.redirect_stdout(SignalOutput(self.message)):
+                db = PRS_db()
+                # Each gas has six database milestones: read its CSV, stage
+                # rows, then update flags, analysis, raw, and ancillary data.
+                # Exporting, when requested, adds one milestone per gas.
+                units_per_gas = 6 + (1 if self.extract_first else 0)
+                total_units = len(self.gases) * units_per_gas
+                completed_units = 0
+                last_progress = -1
+
+                def report_progress(percent):
+                    nonlocal last_progress
+                    percent = int(percent)
+                    if percent != last_progress:
+                        self.progress.emit(percent)
+                        last_progress = percent
+
+                def advance(units=1):
+                    nonlocal completed_units
+                    completed_units += units
+                    report_progress(completed_units / total_units * 100)
+
+                if self.extract_first:
+                    self.message.emit(f'Exporting {len(self.gases)} analytes from GCwerks...\n')
+
+                    def export_progress(percent):
+                        export_units = percent / 100 * len(self.gases)
+                        report_progress(export_units / total_units * 100)
+
+                    PRS_GCwerks_Export().export_gc_data(
+                        self.start_date, self.gases, progress=export_progress)
+                    advance(len(self.gases))
+
+                for gas in self.gases:
+                    self.message.emit(f'Reading {gas} from {self.start_date} to {self.end_date}...\n')
+                    df = db.load_gcwerks(gas, self.start_date, self.end_date)
+                    advance()
+                    if df is None or df.empty:
+                        self.message.emit(f'No rows to update for {gas}; skipped.\n')
+                        advance(5)
+                    else:
+                        self.message.emit(f'Staging {gas} rows...\n')
+                        db.tmptbl_fill(df)
+                        advance()
+                        self.message.emit(f'Updating internal flags for {gas}...\n')
+                        db.tmptbl_update_flags_internal()
+                        advance()
+                        self.message.emit(f'Updating analysis records for {gas}...\n')
+                        db.tmptbl_update_analysis()
+                        advance()
+                        self.message.emit(f'Updating raw peak data for {gas}...\n')
+                        db.tmptbl_update_raw_data()
+                        advance()
+                        self.message.emit(f'Updating ancillary data for {gas}...\n')
+                        db.tmptbl_update_ancillary_data()
+                        advance()
+                        self.message.emit(f'Done inserting {gas} data.\n')
+        except Exception:
+            self.failed.emit(traceback.format_exc())
+        finally:
+            self.finished.emit()
+
+
+class PRS_DBGUI:
     def __init__(self):
-        #super().__init__()
-        self.pr1db = PR1_db()
-
         app = QApplication(sys.argv)
 
         # Set the look and feel of the app
@@ -69,11 +179,11 @@ class PR1_DBGUI():
             }
         """)
 
-        window = QWidget()
+        self.window = QWidget()
 
         # Set the title and initial size of the main window
-        window.setWindowTitle('Persus (PR1) HATS DB Update')
-        window.setGeometry(100, 100, 600, 600)
+        self.window.setWindowTitle('Perseus (PRS) HATS DB Update')
+        self.window.setGeometry(100, 100, 600, 600)
 
         # Create a layout
         layout = QVBoxLayout()
@@ -83,12 +193,6 @@ class PR1_DBGUI():
         layout.addWidget(gas_label)
         self.gas_list = MyListWidget()
         self.gas_list.setSelectionMode(QListWidget.MultiSelection)
-        gases = sorted(self.pr1db.analytes)
-        #try:
-        #    gases.remove('1,2-DCE')
-        #except ValueError:
-        #    pass
-        self.gas_list.addItems(gases)
         layout.addWidget(self.gas_list)
 
         # Connect the doubleClicked signal to the slot
@@ -116,7 +220,7 @@ class PR1_DBGUI():
         date_layout.addWidget(self.end_date_input)
 
         layout.addLayout(date_layout)
-        window.setLayout(layout)
+        self.window.setLayout(layout)
 
         # Checkbox for "extract gcwerks first"
         self.extract_checkbox = QCheckBox('Re-extract from GCwerks First')
@@ -140,63 +244,80 @@ class PR1_DBGUI():
         self.progress_bar.setValue(0)
 
         # Set the layout to the main window
-        window.setLayout(layout)
-        window.show()
+        self.window.setLayout(layout)
+        self.execute_button.setEnabled(False)
+        self.window.show()
+        self.load_analytes()
         sys.exit(app.exec_())
 
     def clear_selection(self):
         self.gas_list.clearSelection()
 
     def execute_process(self):
-        # Redirect stdout
-        sys.stdout = self.OutputWrapper(self.output_display)
-
         # Get selected gases
         selected_gases = [item.text() for item in self.gas_list.selectedItems()]
+        if not selected_gases:
+            self.append_output('Select at least one analyte before starting.\n')
+            return
 
-        # start and end date ranges.
-        t0 = self.pr1db.convert_date_format(self.start_date_input.text())
-        t1 = self.pr1db.convert_date_format(self.end_date_input.text())
+        try:
+            t0 = PRS_db.convert_date_format(self.start_date_input.text())
+            t1 = PRS_db.convert_date_format(self.end_date_input.text())
+            if not re.fullmatch(r'\d{4}', t0) or not re.fullmatch(r'\d{4}', t1):
+                raise ValueError('dates must use YYMM format, for example 2609.')
+            if t0 > t1:
+                raise ValueError('Start date must not be after end date.')
+        except ValueError as error:
+            self.append_output(f'Invalid date: {error}\n')
+            return
 
-        def progress_callback(progress):
-            self.progress_bar.setValue(progress)
+        self.execute_button.setEnabled(False)
+        self.update_failed = False
+        self.progress_bar.setValue(0)
+        self.append_output(f'Starting PRS update for {", ".join(selected_gases)}.\n')
+        self.update_thread = QThread(self.window)
+        self.update_worker = UpdateWorker(selected_gases, t0, t1, self.extract_checkbox.isChecked())
+        self.update_worker.moveToThread(self.update_thread)
+        self.update_thread.started.connect(self.update_worker.run)
+        self.update_worker.message.connect(self.append_output)
+        self.update_worker.progress.connect(self.progress_bar.setValue)
+        self.update_worker.failed.connect(self.show_error)
+        self.update_worker.finished.connect(self.update_thread.quit)
+        self.update_worker.finished.connect(self.update_worker.deleteLater)
+        self.update_thread.finished.connect(self.update_complete)
+        self.update_thread.finished.connect(self.update_thread.deleteLater)
+        self.update_thread.start()
 
-        # Check if "extract gcwerks first" is checked
-        extract_first = self.extract_checkbox.isChecked()
-        if extract_first:
-            PR1_GCwerks_Export().export_gc_data(t0, selected_gases, progress=progress_callback)
+    def load_analytes(self):
+        self.init_thread = QThread(self.window)
+        self.init_worker = AnalyteWorker()
+        self.init_worker.moveToThread(self.init_thread)
+        self.init_thread.started.connect(self.init_worker.run)
+        self.init_worker.message.connect(self.append_output)
+        self.init_worker.ready.connect(self.set_analytes)
+        self.init_worker.failed.connect(self.show_error)
+        self.init_worker.finished.connect(self.init_thread.quit)
+        self.init_worker.finished.connect(self.init_worker.deleteLater)
+        self.init_thread.finished.connect(self.init_thread.deleteLater)
+        self.init_thread.start()
 
-        # insert into db tables
-        for n, gas in enumerate(selected_gases):
-            progress = int(n/len(selected_gases)*100)
-            progress_callback(progress)
-            print(f"Loading {gas} for {t0} to {t1}")
-            df = self.pr1db.load_gcwerks(gas, t0, t1)
-            self.pr1db.tmptbl_fill(df)             # create and fill in temp data table with GCwerks results
-            self.pr1db.tmptbl_update_analysis()    # insert and update any rows in hats.analysis with new data
-            self.pr1db.tmptbl_update_raw_data()    # update the hats.raw_data table with area, ht, w, rt
-            print(f"Done inserting {gas} data.")
+    def set_analytes(self, gases):
+        self.gas_list.addItems(gases)
+        self.execute_button.setEnabled(True)
 
-        # Clear the selection in the gas list
+    def append_output(self, message):
+        self.output_display.moveCursor(QTextCursor.End)
+        self.output_display.insertPlainText(message)
+        self.output_display.ensureCursorVisible()
+
+    def show_error(self, details):
+        self.update_failed = True
+        self.append_output(f'ERROR:\n{details}\n')
+
+    def update_complete(self):
         self.gas_list.clearSelection()
-        print('DONE\n')
-        progress_callback(100)
-        time.sleep(2)
-        progress_callback(0)
-
-
-    class OutputWrapper:
-        def __init__(self, text_edit):
-            self.text_edit = text_edit
-
-        def write(self, message):
-            # Append message without adding extra line feed
-            self.text_edit.moveCursor(QTextCursor.End)
-            self.text_edit.insertPlainText(message)
-            self.text_edit.ensureCursorVisible()
-
-        def flush(self):
-            pass
+        self.execute_button.setEnabled(True)
+        self.append_output('Update failed; see error details above.\n' if self.update_failed else 'DONE\n')
 
 
 class MyListWidget(QListWidget):
@@ -224,13 +345,16 @@ def parse_molecules(molecules):
     return []
 
 def process_gas(gas, start_date, end_date):
-    pr1 = PR1_db()
-    df = pr1.load_gcwerks(gas, start_date, stop_date=end_date)
-    pr1.tmptbl_fill(df)             # create and fill in temp data table with GCwerks results
-    pr1.tmptbl_update_flags_internal() # need to call this before analysis rows are added.
-    pr1.tmptbl_update_analysis()    # insert and update any rows in hats.analysis with new data
-    pr1.tmptbl_update_raw_data()    # update the hats.raw_data table with area, ht, w, rt
-    pr1.tmptbl_update_ancillary_data()  # updates the hats.ancillary table with p, p0, pnet, and t1 values
+    prs = PRS_db()
+    df = prs.load_gcwerks(gas, start_date, stop_date=end_date)
+    if df is None or df.empty:
+        print(f'No rows to update for {gas}; skipped.')
+        return
+    prs.tmptbl_fill(df)             # create and fill in temp data table with GCwerks results
+    prs.tmptbl_update_flags_internal() # need to call this before analysis rows are added.
+    prs.tmptbl_update_analysis()    # insert and update any rows in hats.analysis with new data
+    prs.tmptbl_update_raw_data()    # update the hats.raw_data table with area, ht, w, rt
+    prs.tmptbl_update_ancillary_data()  # updates the hats.ancillary table with p, p0, pnet, and t1 values
 
 def run_in_parallel(molecules, start_date, end_date):
     with concurrent.futures.ThreadPoolExecutor() as executor:
@@ -256,30 +380,30 @@ def main():
 
     args = parser.parse_args()
 
-    pr1 = PR1_db()
-    yymm = pr1.convert_date_format(args.date0)          # start date
-    yymm_end = pr1.convert_date_format(args.date1)      # end date
+    prs = PRS_db()
+    yymm = prs.convert_date_format(args.date0)          # start date
+    yymm_end = prs.convert_date_format(args.date1)      # end date
 
     if args.batch:
         # batch process all molecules
         if args.extract:
-            PR1_GCwerks_Export().export_gc_data(yymm, pr1.molecules)
-        run_in_parallel(pr1.molecules, yymm, yymm_end)
+            PRS_GCwerks_Export().export_gc_data(yymm, prs.molecules)
+        run_in_parallel(prs.molecules, yymm, yymm_end)
         quit()
 
     elif args.list:
-        molecules_c = [m.replace(',', '') for m in pr1.molecules]       # remove commas from mol names
+        molecules_c = [m.replace(',', '') for m in prs.molecules]       # remove commas from mol names
         print(f"Valid molecule names: {', '.join(molecules_c)}")
         quit()
 
     # launch the gui?
     if (args.date0==get_default_yymm() and args.date1 == today_yymm() and args.molecules == 'All') or args.gui:
-        PR1_DBGUI()
+        PRS_DBGUI()
         quit()
 
-    molecules = pr1.molecules if args.molecules == 'All' else parse_molecules(args.molecules)
+    molecules = prs.molecules if args.molecules == 'All' else parse_molecules(args.molecules)
     if args.extract:
-        PR1_GCwerks_Export().export_gc_data(yymm, molecules)
+        PRS_GCwerks_Export().export_gc_data(yymm, molecules)
 
     run_in_parallel(molecules, yymm, yymm_end)
     #for molecule in molecules:

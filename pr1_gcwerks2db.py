@@ -7,19 +7,28 @@ from pathlib import Path
 
 import pr1_export
 
-class PR1_db(pr1_export.PR1_base):
+class PRS_db(pr1_export.PRS_base):
 
     def __init__(self):
         super().__init__()
         self.gcwerks_results = self.export_dir  # Path type
         self.sites = self.gml_sites()           # site codes and numbers
-        self.analytes = self.pr1_analytes()     # PR1 analytes (dict of molecule and parameter number)
+        self.analytes = self.prs_analytes()     # PRS analytes (dict of molecule and parameter number)
         self.analysis_table = 'analysis'        # set to a table like analysis_gsd for debugging
         self.raw_data_table = 'raw_data'        # raw_data_gsd for degugging
         self.ancillary_table = 'ancillary_data' # ancillary_data_gsd for debugging
         self.flags_table = 'flags_internal'
         self.pfplogs_path = Path('/data/Perseus-1/logs/pfp.log/')
         self.pfplogs = pd.DataFrame()
+        self.test_nums = self.equip_test_nums()  # valid equipment test numbers
+        self.test_num_start_date = '20260801'    # test_num is parsed from sample names starting on this date.
+                                                 # Earlier test_nums were entered by hand.
+
+    def equip_test_nums(self):
+        """ Returns the set of test numbers in ccgg_equip.equip_tests_view. """
+        sql = "SELECT DISTINCT test_num FROM ccgg_equip.equip_tests_view;"
+        df = pd.DataFrame(self.db.doquery(sql))
+        return set(df['test_num'].astype(int)) if not df.empty else set()
 
     def load_gcwerks(self, gas, start_date, stop_date='end'):
         """ Loads GCwerks data for a given gas and returns it as a DataFrame.
@@ -109,11 +118,19 @@ class PR1_db(pr1_export.PR1_base):
         df.loc[~df['type'].str.upper().isin(['CCGG', 'PFP', 'HATS']), 'site'] = ''
         df.loc[~df['type'].str.upper().isin(['CCGG', 'PFP', 'HATS']), 'sample_ID'] = df['sample']
 
+        # Test runs have the equipment test number appended to the sample as -XXXX.
+        # Only accept numbers that exist in ccgg_equip.equip_tests_view, because older
+        # test sample names can end in other numbers (e.g. CC738515_d3_130_t3_-50).
+        # The test number is left in sample_ID for verification.
+        is_test = (df['type'].str.lower() == 'test') & (pd.to_datetime(df['time']) >= pd.to_datetime(self.test_num_start_date))
+        test_num = pd.to_numeric(df['sample'].str.extract(r'-(\d+)$')[0], errors='coerce')
+        df['test_num'] = test_num.where(is_test & test_num.isin(self.test_nums)).astype('Int64')
+
         # lookup site number, 0 if not found
         df['site_num'] = df['site'].map(self.sites).fillna(0).astype(int)
 
         # Data processing steps...
-        standards = self.pr1_standards()
+        standards = self.prs_standards()
         standards_num = {k: v[0] for k, v in standards.items()}
         standards_sn = {k: v[1] for k, v in standards.items()}
         # standardized serial number
@@ -146,7 +163,7 @@ class PR1_db(pr1_export.PR1_base):
         # Put columns in order
         # columns 'PFP_mp_i', 'PFP_mp_f', 'pfp_sn', 'Flask' come from the pfplog files.
         columns = ['time', 'type', 'sample', 'site', 'site_num', 'sample_ID', 'event', 'standard', 
-                   'serial_num', 'standard_num', 'lab_num', 'port', 'psamp0', 'psamp', 'psampnet', 'T1', 
+                   'serial_num', 'standard_num', 'lab_num', 'test_num', 'port', 'psamp0', 'psamp', 'psampnet', 'T1', 
                    'pnum', 'area', 'ht', 'rt', 'w', 'start_level', 'end_level', 'PFP_mp_i', 'PFP_mp_f', 'pfp_sn', 'Flask']
         df = df[columns]
         print(f'{gas} gcwerks results loaded.')
@@ -208,6 +225,7 @@ class PR1_db(pr1_export.PR1_base):
                 a.std_serial_num, 
                 a.event_num, 
                 a.lab_num,   
+                a.test_num,
                 r.analysis_num, 
                 r.parameter_num, 
                 r.peak_area, 
@@ -242,16 +260,17 @@ class PR1_db(pr1_export.PR1_base):
         sql_insert = """ 
         INSERT INTO t_data (
             analysis_num, analysis_datetime, inst_num, sample_ID, site_num, sample_type, port, 
-            standards_num, std_serial_num, event_num, lab_num, parameter_num,
+            standards_num, std_serial_num, event_num, lab_num, test_num, parameter_num,
             peak_area, peak_height, peak_width, peak_RT, start_level, end_level, p, p0, pnet, t1, pfp_mp_i, pfp_mp_f
         ) VALUES (
-            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
         );
         """
 
         pnum = df['pnum'].values[0]     # parameter number
 
         params = []
+        staged_rows = 0
   
         for _, row in df.iterrows():
             anum = 0
@@ -266,7 +285,7 @@ class PR1_db(pr1_export.PR1_base):
 
             p0 = (
                 anum, row.time, inst_num, sid, row.site_num, row.type, row.port,
-                row.standard_num, row.serial_num, row.event, row.lab_num, pnum,
+                row.standard_num, row.serial_num, row.event, row.lab_num, self.NULL(row.test_num), pnum,
                 self.NULL(row.area), self.NULL(row.ht), self.NULL(row.w), self.NULL(row.rt),
                 self.NULL(row.start_level), self.NULL(row.end_level),
                 self.NULL(row.psamp), self.NULL(row.psamp0), self.NULL(row.psampnet), self.NULL(row.T1),
@@ -275,10 +294,12 @@ class PR1_db(pr1_export.PR1_base):
 
             if row.type != 'unknown' and row.type != 'TEST':
                 params.append(p0)
+                staged_rows += 1
                 if self.db.doMultiInsert(sql_insert, params): 
                     params=[]
                 
         self.db.doMultiInsert(sql_insert, params, all=True)
+        print(f'Staged {staged_rows} {self.system_name} records for database update.')
 
         self.tmptbl_get_eventnum()       # get event_num info from ccgg.flask_event table
         self.tmptbl_get_analnum()        # fill in previous anaysis data
@@ -337,7 +358,7 @@ class PR1_db(pr1_export.PR1_base):
         sql = f"""
             SELECT DISTINCT 
                 analysis_datetime, inst_num, sample_ID, site_num, sample_type, port, 
-                standards_num, std_serial_num, event_num, lab_num
+                standards_num, std_serial_num, event_num, lab_num, test_num
             FROM t_data 
             WHERE analysis_num = 0;
         """
@@ -352,11 +373,11 @@ class PR1_db(pr1_export.PR1_base):
         sql = f"""
             INSERT INTO {self.analysis_table} (
                 analysis_datetime, inst_num, sample_ID, site_num, sample_type, port, 
-                standards_num, std_serial_num, event_num, lab_num
+                standards_num, std_serial_num, event_num, lab_num, test_num
             )
             SELECT DISTINCT 
                 analysis_datetime, inst_num, sample_ID, site_num, sample_type, port, 
-                standards_num, std_serial_num, event_num, lab_num
+                standards_num, std_serial_num, event_num, lab_num, test_num
             FROM t_data t
             WHERE analysis_num = 0
             ON DUPLICATE KEY UPDATE 
@@ -381,7 +402,7 @@ class PR1_db(pr1_export.PR1_base):
             SET a.standards_num=t.standards_num, a.std_serial_num=t.std_serial_num, 
                 a.port=t.port, a.sample_type=t.sample_type, a.site_num=t.site_num,
                 a.sample_ID=t.sample_ID, a.event_num=t.event_num, a.lab_num=t.lab_num,
-                a.inst_num=t.inst_num
+                a.inst_num=t.inst_num, a.test_num=COALESCE(t.test_num, a.test_num)
             WHERE a.num=t.analysis_num and t.analysis_num!=0
         """
         updated = self.db.doquery(sql)
@@ -465,21 +486,29 @@ def parse_molecules(molecules):
     return []
 
 
+# Compatibility alias for existing command-line and external callers.
+PR1_db = PRS_db
+
+
 def main():
-    pr1 = PR1_db()
+    prs = PRS_db()
 
     parser = argparse.ArgumentParser(description='Insert Perseus GCwerks data into HATS db for selected date range. If no start_date \
                                      is specifide then work on the last 30 days of data.')
     parser.add_argument('date', nargs='?', default=get_default_date(), help='Date in the format YYMM')
-    parser.add_argument('-m', '--molecules', type=str, default=pr1.molecules,
+    parser.add_argument('-m', '--molecules', type=str, default=prs.molecules,
                         help='Comma-separated list of molecules. Add quotes around the list if spaces are used. Default all molecules.')
     parser.add_argument('-x', '--extract', action='store_true', help='Re-extract data from GCwerks first.')
     parser.add_argument('--list', action='store_true', help='List all available molecule names.')
+    parser.add_argument('--dry-run', action='store_true',
+                        help='Fill the temporary table only and show what would be inserted. No changes are made to the database.')
+    parser.add_argument('-o', '--output', type=str,
+                        help='With --dry-run, write the temporary table to this CSV file (one file per molecule, prefixed with the molecule name).')
 
     args = parser.parse_args()
 
     if args.list:
-        molecules_c = [m.replace(',', '') for m in pr1.molecules]       # remove commas from mol names
+        molecules_c = [m.replace(',', '') for m in prs.molecules]       # remove commas from mol names
         print(f"Valid molecule names: {', '.join(molecules_c)}")
         quit()
     
@@ -490,22 +519,36 @@ def main():
     print("Processing the following molecules: ", molecules)
 
     if args.extract:
-        pr1_export.PR1_GCwerks_Export().export_gc_data(start_date, molecules)
+        pr1_export.PRS_GCwerks_Export().export_gc_data(start_date, molecules)
     
     for n, gas in enumerate(molecules):
-        df = pr1.load_gcwerks(gas, start_date)
+        df = prs.load_gcwerks(gas, start_date)
         #print(df.loc[df['time'] > '2024-08-28 03:11:00'])
         
         if df is not None and not df.empty:
-            pr1.tmptbl_fill(df)             # create and fill in temp data table with GCwerks results
+            prs.tmptbl_fill(df)             # create and fill in temp data table with GCwerks results
+
+            if args.dry_run:
+                tmp = prs.tmptbl_output()
+                tests = tmp.loc[tmp.sample_type.str.lower() == 'test']
+                print(f'{gas}: {len(tmp)} rows in t_data, {len(tests)} test rows, '
+                      f'{tests.test_num.notna().sum()} with a test_num.')
+                print(tests[['analysis_datetime', 'analysis_num', 'inst_num', 'sample_ID', 'sample_type',
+                             'test_num']].tail(20).to_string(index=False))
+                if args.output:
+                    out = Path(args.output)
+                    out = out.with_name(f'{gas}_{out.name}')
+                    tmp.to_csv(out, index=False)
+                    print(f'Wrote {out}')
+                continue
 
             #tmp = pd.DataFrame(pr1.tmptbl_output())
             #print(tmp.loc[tmp.analysis_num >= 317010][['analysis_datetime', 'analysis_num', 'sample_type']])
 
-            pr1.tmptbl_update_flags_internal()  # need to call this before analysis rows are added.
-            pr1.tmptbl_update_analysis()    # insert and update any rows in hats.analysis with new data
-            pr1.tmptbl_update_raw_data()    # update the hats.raw_data table with area, ht, w, rt
-            pr1.tmptbl_update_ancillary_data()  # updates the hats.ancillary table with p, p0, pnet, and t1 values
+            prs.tmptbl_update_flags_internal()  # need to call this before analysis rows are added.
+            prs.tmptbl_update_analysis()    # insert and update any rows in hats.analysis with new data
+            prs.tmptbl_update_raw_data()    # update the hats.raw_data table with area, ht, w, rt
+            prs.tmptbl_update_ancillary_data()  # updates the hats.ancillary table with p, p0, pnet, and t1 values
 
 
 if __name__ == '__main__':
