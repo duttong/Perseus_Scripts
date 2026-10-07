@@ -163,7 +163,7 @@ class PRS_db(pr1_export.PRS_base):
         # Put columns in order
         # columns 'PFP_mp_i', 'PFP_mp_f', 'pfp_sn', 'Flask' come from the pfplog files.
         columns = ['time', 'type', 'sample', 'site', 'site_num', 'sample_ID', 'event', 'standard', 
-                   'serial_num', 'standard_num', 'lab_num', 'test_num', 'port', 'psamp0', 'psamp', 'psampnet', 'T1', 
+                   'serial_num', 'standard_num', 'lab_num', 'test_num', 'port', 'psamp0', 'psamp', 'psampnet', 'tsamp', 'T1', 
                    'pnum', 'area', 'ht', 'rt', 'w', 'start_level', 'end_level', 'PFP_mp_i', 'PFP_mp_f', 'pfp_sn', 'Flask']
         df = df[columns]
         print(f'{gas} gcwerks results loaded.')
@@ -236,6 +236,7 @@ class PRS_db(pr1_export.PRS_base):
                 r.peak_area AS p0,
                 r.peak_area AS pnet,
                 r.peak_area AS t1,
+                r.peak_area AS tsamp,
                 r.peak_area AS start_level,
                 r.peak_area AS end_level,
                 r.peak_area AS pfp_mp_i,
@@ -265,9 +266,10 @@ class PRS_db(pr1_export.PRS_base):
         INSERT INTO t_data (
             analysis_num, analysis_datetime, inst_num, sample_ID, site_num, sample_type, port, 
             standards_num, std_serial_num, event_num, lab_num, test_num, parameter_num,
-            peak_area, peak_height, peak_width, peak_RT, start_level, end_level, p, p0, pnet, t1, pfp_mp_i, pfp_mp_f
+            peak_area, peak_height, peak_width, peak_RT, start_level, end_level, p, p0, pnet, t1, tsamp,
+            pfp_mp_i, pfp_mp_f
         ) VALUES (
-            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
         );
         """
 
@@ -293,7 +295,7 @@ class PRS_db(pr1_export.PRS_base):
                 self.NULL(row.area), self.NULL(row.ht), self.NULL(row.w), self.NULL(row.rt),
                 self.NULL(row.start_level), self.NULL(row.end_level),
                 self.NULL(row.psamp), self.NULL(row.psamp0), self.NULL(row.psampnet), self.NULL(row.T1),
-                self.NULL(row.PFP_mp_i), self.NULL(row.PFP_mp_f)
+                self.NULL(row.tsamp), self.NULL(row.PFP_mp_i), self.NULL(row.PFP_mp_f)
             )
 
             if row.type != 'unknown' and row.type != 'TEST':
@@ -460,7 +462,8 @@ class PRS_db(pr1_export.PRS_base):
     def tmptbl_update_ancillary_data(self):
         # Inserts or updates four parameters p, p0, pnet, and t1 into the ancillary_data table
         # added PFP_mp_i and PFP_mp_f
-        parameters = [(9, 'pfp_mp_f'), (10, 'pfp_mp_i'), (26, 'pnet'), (27, 'p0'), (28, 'p'), (29, 't1')]
+        # added tsamp (sample_temp in hats.ancillary_def)
+        parameters = [(9, 'pfp_mp_f'), (10, 'pfp_mp_i'), (26, 'pnet'), (27, 'p0'), (28, 'p'), (29, 't1'), (33, 'tsamp')]
 
         for param_num, column in parameters:
             sql = f"""
@@ -552,7 +555,7 @@ def main():
             prs.tmptbl_update_flags_internal()  # need to call this before analysis rows are added.
             prs.tmptbl_update_analysis()    # insert and update any rows in hats.analysis with new data
             prs.tmptbl_update_raw_data()    # update the hats.raw_data table with area, ht, w, rt
-            prs.tmptbl_update_ancillary_data()  # updates the hats.ancillary table with p, p0, pnet, and t1 values
+            prs.tmptbl_update_ancillary_data()  # updates the hats.ancillary table with p, p0, pnet, t1, and tsamp values
 
 
 if __name__ == '__main__':

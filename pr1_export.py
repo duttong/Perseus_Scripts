@@ -107,7 +107,7 @@ class PRS_GCwerks_Export(PRS_base):
         for molecule in molecules:
             if molecule in self.molecules:
                 filename = f"data_{molecule}.csv"
-                params = f"time runtype tank stdtank port psamp0 psamp T1 {molecule}.area {molecule}.ht {molecule}.rt {molecule}.w {molecule}.start_level {molecule}.end_level"
+                params = f"time runtype tank stdtank port psamp0 psamp tsamp T1 {molecule}.area {molecule}.ht {molecule}.rt {molecule}.w {molecule}.start_level {molecule}.end_level"
                 # params_extra = f"{params} {molecule}.skew {molecule}.rl.a {molecule}.rl.ht {molecule}.rl.report {molecule}.c.a {molecule}.c.ht {molecule}.c.report"
                 command = f"{self.gcexport_path} {self.gcwerks_dir} -csv -nonan -mindate {start_date} {params} > {self.export_dir}/{filename}"
                 #subprocess.run(command, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
