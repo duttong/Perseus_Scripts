@@ -23,6 +23,8 @@ class PRS_db(pr1_export.PRS_base):
         self.test_nums = self.equip_test_nums()  # valid equipment test numbers
         self.test_num_start_date = '20260801'    # test_num is parsed from sample names starting on this date.
                                                  # Earlier test_nums were entered by hand.
+        self.hatsflask_event_start_date = '20260829'  # HATS sample names carry the hatsflask event num starting
+                                                      # on this date. Earlier names carry the pair ID.
 
     def equip_test_nums(self):
         """ Returns the set of test numbers in ccgg_equip.equip_tests_view. """
@@ -226,6 +228,7 @@ class PRS_db(pr1_export.PRS_base):
                 a.event_num, 
                 a.lab_num,   
                 a.test_num,
+                a.hatsflask_event_num,
                 r.analysis_num, 
                 r.parameter_num, 
                 r.peak_area, 
@@ -308,6 +311,7 @@ class PRS_db(pr1_export.PRS_base):
         print(f'Staged {staged_rows} {self.system_name} records for database update.')
 
         self.tmptbl_get_eventnum()       # get event_num info from ccgg.flask_event table
+        self.tmptbl_get_hatsflask_eventnum()    # set hatsflask_event_num for HATS samples
         self.tmptbl_get_analnum()        # fill in previous anaysis data
 
     def tmptbl_get_eventnum(self):
@@ -327,6 +331,23 @@ class PRS_db(pr1_export.PRS_base):
                 LIMIT 1
             )
             WHERE t.sample_type != 'HATS';
+        """
+        self.db.doquery(sql)
+
+    def tmptbl_get_hatsflask_eventnum(self):
+        """
+        Update the `hatsflask_event_num` in the temporary table `t_data` for HATS samples.
+        The event parsed from the sample name is only used if it is a hats.hatsflask_event
+        for that flask. HATS samples before hatsflask_event_start_date are left NULL because
+        the parsed value is a pair ID, which can match an unrelated event for the same flask.
+        """
+        start = pd.to_datetime(self.hatsflask_event_start_date).strftime('%Y-%m-%d')
+        sql = f"""
+            UPDATE t_data t
+            JOIN hats.hatsflask_event e ON e.num = t.event_num AND e.flask_id = t.sample_ID
+            SET t.hatsflask_event_num = e.num
+            WHERE t.sample_type = 'HATS'
+            AND t.analysis_datetime >= '{start}';
         """
         self.db.doquery(sql)
 
@@ -364,7 +385,7 @@ class PRS_db(pr1_export.PRS_base):
         sql = f"""
             SELECT DISTINCT 
                 analysis_datetime, inst_num, sample_ID, site_num, sample_type, port, 
-                standards_num, std_serial_num, event_num, lab_num, test_num
+                standards_num, std_serial_num, event_num, lab_num, test_num, hatsflask_event_num
             FROM t_data 
             WHERE analysis_num = 0;
         """
@@ -379,11 +400,11 @@ class PRS_db(pr1_export.PRS_base):
         sql = f"""
             INSERT INTO {self.analysis_table} (
                 analysis_datetime, inst_num, sample_ID, site_num, sample_type, port, 
-                standards_num, std_serial_num, event_num, lab_num, test_num
+                standards_num, std_serial_num, event_num, lab_num, test_num, hatsflask_event_num
             )
             SELECT DISTINCT 
                 analysis_datetime, inst_num, sample_ID, site_num, sample_type, port, 
-                standards_num, std_serial_num, event_num, lab_num, test_num
+                standards_num, std_serial_num, event_num, lab_num, test_num, hatsflask_event_num
             FROM t_data t
             WHERE analysis_num = 0
             ON DUPLICATE KEY UPDATE 
@@ -408,7 +429,8 @@ class PRS_db(pr1_export.PRS_base):
             SET a.standards_num=t.standards_num, a.std_serial_num=t.std_serial_num, 
                 a.port=t.port, a.sample_type=t.sample_type, a.site_num=t.site_num,
                 a.sample_ID=t.sample_ID, a.event_num=t.event_num, a.lab_num=t.lab_num,
-                a.inst_num=t.inst_num, a.test_num=COALESCE(t.test_num, a.test_num)
+                a.inst_num=t.inst_num, a.test_num=COALESCE(t.test_num, a.test_num),
+                a.hatsflask_event_num=COALESCE(t.hatsflask_event_num, a.hatsflask_event_num)
             WHERE a.num=t.analysis_num and t.analysis_num!=0
         """
         updated = self.db.doquery(sql)
