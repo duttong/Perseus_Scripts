@@ -102,12 +102,12 @@ class PRS_db(pr1_export.PRS_base):
         # one dash in sample
         # BLD-badtestB
         # need to leave ALM-XXX and SX-XXXX alone
-        pattern = r'^([A-Z]+)-?([A-Za-z0-9]+)?$'
+        pattern = r'^([A-Z]+)-?([A-Za-z0-9#]+)?$'
         df.loc[df['sample'].str.count('-') == 1, 'site'] = df['sample'].str.extract(pattern)[0]
         df.loc[df['sample'].str.count('-') == 1, 'sample_ID'] = df['sample'].str.extract(pattern)[1]
         # two dashes in sample
         # SMO-1223-34333 and BLD-badtestA-00
-        pattern = r'^([A-Z]{3})-([A-Za-z0-9_]+)-?([A-Za-z0-9]+)?$'
+        pattern = r'^([A-Z]{3})-([A-Za-z0-9_#]+)-?([A-Za-z0-9]+)?$'
         extracted = df['sample'].str.extract(pattern)
         df.loc[(df['sample'].str.count('-') == 2), 'site'] = extracted[0]
         df.loc[(df['sample'].str.count('-') == 2), 'sample_ID'] = extracted[1] + "-" + extracted[2]
